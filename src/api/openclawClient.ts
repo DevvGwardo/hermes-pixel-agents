@@ -77,7 +77,7 @@ export async function listSessions(
   activeMinutes?: number,
 ): Promise<OpenClawSession[]> {
   const args: Record<string, unknown> = { limit, messageLimit: 0 };
-  if (activeMinutes) args.activeMinutes = activeMinutes;
+  if (activeMinutes !== undefined && activeMinutes > 0) args.activeMinutes = activeMinutes;
 
   const resp = await toolInvoke('sessions_list', args);
   if (!resp.ok || !resp.result?.details) return [];
@@ -270,7 +270,7 @@ export function createPoller(
 
   async function doPoll() {
     try {
-      const sessions = await listSessions(50, 120);
+      const sessions = await listSessions(50);
       if (!connected) {
         connected = true;
         onStatusChange?.(true);
