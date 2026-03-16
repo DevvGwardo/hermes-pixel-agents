@@ -128,6 +128,7 @@ async function readFileChunk(
 export interface TranscriptToolUse {
   kind: 'tool_use';
   name: string;
+  toolUseId?: string;
   input: Record<string, unknown>;
 }
 
@@ -194,6 +195,7 @@ export function createTranscriptWatcher(
               events.push({
                 kind: 'tool_use',
                 name: b.name as string,
+                toolUseId: b.id as string | undefined,
                 input: (b.input as Record<string, unknown>) ?? {},
               });
             } else if (role === 'tool' && b.type === 'tool_result') {

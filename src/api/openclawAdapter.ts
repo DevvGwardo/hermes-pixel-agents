@@ -65,8 +65,12 @@ function getOrCreateAgentId(sessionKey: string): number {
 
 // ── Subagent tracking ────────────────────────────────────────────────────
 
-/** Maps subagent label → agent ID */
+/** Maps subagent unique key (tool_use id) → agent ID */
 const subagentIds = new Map<string, number>();
+/** Maps tool_use id → display label for subagents */
+const subagentLabels = new Map<string, string>();
+/** Tracks pending Agent tool_use IDs that haven't completed yet */
+const pendingAgentToolUseIds = new Set<string>();
 /** Tracks the last tool activity time per agent ID */
 const agentLastActivity = new Map<number, number>();
 /** The main (first) session's agent ID, set once sessions come in */
@@ -93,6 +97,8 @@ const TOOL_ACTIVITY: Record<string, ActivityCategory> = {
   web_fetch: 'searching',
   web_search_brave: 'searching',
   sessions_spawn: 'spawning',
+  agent: 'spawning',
+  task: 'spawning',
 };
 
 function getActivityForTool(toolName: string): ActivityCategory {
@@ -101,29 +107,45 @@ function getActivityForTool(toolName: string): ActivityCategory {
 
 // ── Transcript event handler ─────────────────────────────────────────────
 
+/** Tool names that indicate subagent spawning (case-insensitive match) */
+const SUBAGENT_TOOL_NAMES = new Set(['agent', 'task', 'sessions_spawn']);
+
+function isSubagentTool(name: string): boolean {
+  return SUBAGENT_TOOL_NAMES.has(name.toLowerCase());
+}
+
 function handleTranscriptEvents(events: TranscriptEvent[]): void {
   for (const event of events) {
     if (event.kind === 'tool_use') {
       // Detect subagent spawning
-      if (event.name === 'sessions_spawn') {
-        const label = (event.input.label as string) ?? (event.input.task as string)?.slice(0, 30) ?? 'subagent';
-        if (!subagentIds.has(label)) {
-          const id = getOrCreateAgentId(`subagent:${label}`);
-          subagentIds.set(label, id);
+      if (isSubagentTool(event.name)) {
+        const toolUseId = event.toolUseId ?? `anon-${Date.now()}-${Math.random()}`;
+        // Use description (Agent tool) or label/task (legacy) for display
+        const label =
+          (event.input.description as string) ??
+          (event.input.label as string) ??
+          (event.input.task as string)?.slice(0, 40) ??
+          'subagent';
+
+        if (!subagentIds.has(toolUseId)) {
+          const id = getOrCreateAgentId(`subagent:${toolUseId}`);
+          subagentIds.set(toolUseId, id);
+          subagentLabels.set(toolUseId, label);
+          pendingAgentToolUseIds.add(toolUseId);
           dispatchToWebview({ type: 'agentCreated', id, folderName: label });
           dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
           agentLastActivity.set(id, Date.now());
-          console.log(`[Adapter] Subagent spawned: "${label}" → agent ${id}`);
+          console.log(`[Adapter] Subagent spawned: "${label}" (${toolUseId}) → agent ${id}`);
         } else {
           // Already known subagent, mark active again
-          const id = subagentIds.get(label)!;
+          const id = subagentIds.get(toolUseId)!;
           dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
           agentLastActivity.set(id, Date.now());
         }
       }
 
-      // Update main agent activity for any tool call
-      if (mainAgentId !== null) {
+      // Update main agent activity for any non-subagent tool call
+      if (mainAgentId !== null && !isSubagentTool(event.name)) {
         const activity = getActivityForTool(event.name);
         const mappedName = mapToolName(event.name);
         dispatchToWebview({ type: 'agentStatus', id: mainAgentId, status: 'active' });
@@ -131,35 +153,30 @@ function handleTranscriptEvents(events: TranscriptEvent[]): void {
         agentLastActivity.set(mainAgentId, Date.now());
       }
     } else if (event.kind === 'tool_result') {
-      // Check if a subagent completed (sessions_spawn result or subagent_announce)
-      if (event.name === 'subagent_announce' || event.name === 'sessions_spawn') {
-        // Try to find the subagent by matching content
-        // Mark all active subagents as completing if we see a spawn result
-        if (event.name === 'subagent_announce') {
-          // subagent_announce content may contain the label
-          const contentStr = typeof event.content === 'string'
-            ? event.content
-            : JSON.stringify(event.content);
-          for (const [label, id] of subagentIds) {
-            if (contentStr.includes(label)) {
-              dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
-              scheduleSubagentClose(label, id);
-            }
-          }
+      // Check if this result corresponds to a pending subagent
+      const toolUseId = event.toolUseId;
+      if (toolUseId && pendingAgentToolUseIds.has(toolUseId)) {
+        pendingAgentToolUseIds.delete(toolUseId);
+        const id = subagentIds.get(toolUseId);
+        if (id !== undefined) {
+          dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
+          scheduleSubagentClose(toolUseId, id);
         }
       }
     }
   }
 }
 
-function scheduleSubagentClose(label: string, id: number): void {
+function scheduleSubagentClose(toolUseId: string, id: number): void {
+  const label = subagentLabels.get(toolUseId) ?? toolUseId;
   setTimeout(() => {
     dispatchToWebview({ type: 'agentClosed', id });
-    subagentIds.delete(label);
-    sessionToAgent.delete(`subagent:${label}`);
+    subagentIds.delete(toolUseId);
+    subagentLabels.delete(toolUseId);
+    sessionToAgent.delete(`subagent:${toolUseId}`);
     agentToSession.delete(id);
     agentLastActivity.delete(id);
-    console.log(`[Adapter] Subagent closed: "${label}" → agent ${id}`);
+    console.log(`[Adapter] Subagent closed: "${label}" (${toolUseId}) → agent ${id}`);
   }, 5000);
 }
 
