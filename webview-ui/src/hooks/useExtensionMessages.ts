@@ -9,7 +9,7 @@ import { setCharacterTemplates } from '../office/sprites/spriteData.js';
 import { extractToolName } from '../office/toolUtils.js';
 import type { OfficeLayout, ToolActivity } from '../office/types.js';
 import { setWallSprites } from '../office/wallTiles.js';
-import { vscode } from '../vscodeApi.js';
+import { vscode } from '../messageBus.js';
 
 export interface SubagentCharacter {
   id: number;

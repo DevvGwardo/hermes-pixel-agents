@@ -1,5 +1,5 @@
 import type { ToolActivity } from '../office/types.js';
-import { vscode } from '../vscodeApi.js';
+import { vscode } from '../messageBus.js';
 
 interface DebugViewProps {
   agents: number[];

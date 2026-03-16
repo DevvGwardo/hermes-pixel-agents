@@ -30,7 +30,7 @@ import type {
 } from '../office/types.js';
 import { EditTool } from '../office/types.js';
 import { TileType } from '../office/types.js';
-import { vscode } from '../vscodeApi.js';
+import { vscode } from '../messageBus.js';
 
 export interface EditorActions {
   isEditMode: boolean;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import type { WorkspaceFolder } from '../hooks/useExtensionMessages.js';
-import { vscode } from '../vscodeApi.js';
+import { vscode } from '../messageBus.js';
 import { SettingsModal } from './SettingsModal.js';
 
 interface BottomToolbarProps {

@@ -1,13 +1,14 @@
 {
-  "name": "webview-ui",
+  "name": "openclaw-pixel-agents",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "description": "Pixel art office visualization for OpenClaw AI agent sessions",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "lint": "eslint ."
   },
   "dependencies": {
     "react": "^19.2.0",

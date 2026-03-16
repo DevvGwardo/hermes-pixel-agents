@@ -14,7 +14,7 @@ import { EditorToolbar } from './office/editor/EditorToolbar.js';
 import { OfficeState } from './office/engine/officeState.js';
 import { isRotatable } from './office/layout/furnitureCatalog.js';
 import { EditTool } from './office/types.js';
-import { vscode } from './vscodeApi.js';
+import { vscode } from './messageBus.js';
 
 // Game state lives outside React — updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null };
@@ -212,7 +212,7 @@ function App() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          color: 'var(--vscode-foreground)',
+          color: 'var(--pixel-text)',
         }}
       >
         Loading...

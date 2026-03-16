@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 import { isSoundEnabled, setSoundEnabled } from '../notificationSound.js';
-import { vscode } from '../vscodeApi.js';
+import { vscode } from '../messageBus.js';
 
 interface SettingsModalProps {
   isOpen: boolean;

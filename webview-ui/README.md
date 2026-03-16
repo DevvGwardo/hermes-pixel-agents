@@ -1,73 +1,74 @@
-# React + TypeScript + Vite
+# OpenClaw Pixel Agents
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Pixel art office visualization for [OpenClaw](https://github.com/openclaw) AI agent sessions. Watch your agents come to life as animated characters in a customizable pixel art office.
 
-Currently, two official plugins are available:
+## Quick Start
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+cd webview-ui
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Open http://localhost:5173 in your browser.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Configuration
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Copy `.env.example` to `.env` and configure:
+
 ```
+VITE_OPENCLAW_GATEWAY_URL=http://localhost:3117
+VITE_OPENCLAW_GATEWAY_TOKEN=
+```
+
+## Build
+
+```sh
+npm run build
+npm run preview
+```
+
+Output goes to `dist/` — deploy anywhere as a static site.
+
+## How It Works
+
+The app connects to the OpenClaw Gateway API via WebSocket for real-time agent session events. Each active session becomes an animated pixel art character in the office.
+
+- **Sessions** map to agent characters with unique appearances
+- **Tool calls** (read, write, exec, etc.) trigger typing/reading animations
+- **Sub-agent sessions** spawn sub-agent characters near the parent
+- **Idle/waiting** agents wander the office or sit at their desks
+
+## Features
+
+- Full office layout editor (floors, walls, furniture)
+- 6 unique character palettes with hue shift variations
+- Spawn/despawn matrix-style animations
+- Sound notifications when agents complete turns
+- Export/import office layouts as JSON
+- Zoom controls and camera follow
+
+## Architecture
+
+```
+src/
+  api/
+    openclawClient.ts    -- HTTP + WebSocket client for OpenClaw Gateway
+    openclawAdapter.ts   -- Maps OpenClaw events to pixel-agents messages
+    assetLoader.ts       -- Loads sprites from /assets/ via browser APIs
+  messageBus.ts          -- Event bus replacing VS Code postMessage
+  App.tsx                -- Main React component
+  hooks/                 -- React hooks (messages, editor, keyboard)
+  components/            -- UI components (toolbar, settings, debug)
+  office/                -- Game engine (unchanged from pixel-agents)
+    engine/              -- Game loop, renderer, characters, state
+    layout/              -- Furniture catalog, serializer, pathfinding
+    editor/              -- Layout editor tools and state
+    sprites/             -- Sprite data and caching
+    components/          -- Canvas and overlay components
+public/assets/           -- Pixel art assets (characters, furniture, tiles)
+```
+
+## Based On
+
+This is a standalone web port of [Pixel Agents](https://github.com/pablodelucca/pixel-agents), a VS Code extension by Pablo De Lucca. All pixel art rendering, animations, and office editor code is preserved.
