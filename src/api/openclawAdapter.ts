@@ -5,9 +5,12 @@
 
 import {
   createPoller,
+  createTranscriptWatcher,
   listSessions,
   type OpenClawPoller,
   type OpenClawSession,
+  type TranscriptEvent,
+  type TranscriptWatcher,
 } from './openclawClient.js';
 import { dispatchToWebview, onOutboundMessage } from '../messageBus.js';
 
@@ -60,6 +63,128 @@ function getOrCreateAgentId(sessionKey: string): number {
   return id;
 }
 
+// ── Subagent tracking ────────────────────────────────────────────────────
+
+/** Maps subagent label → agent ID */
+const subagentIds = new Map<string, number>();
+/** Tracks the last tool activity time per agent ID */
+const agentLastActivity = new Map<number, number>();
+/** The main (first) session's agent ID, set once sessions come in */
+let mainAgentId: number | null = null;
+
+const IDLE_TIMEOUT_MS = 10_000;
+
+// ── Tool → animation category mapping ────────────────────────────────────
+
+type ActivityCategory = 'typing' | 'reading' | 'running' | 'searching' | 'spawning';
+
+const TOOL_ACTIVITY: Record<string, ActivityCategory> = {
+  write: 'typing',
+  edit: 'typing',
+  read: 'reading',
+  glob: 'reading',
+  grep: 'reading',
+  memory_search: 'reading',
+  memory_get: 'reading',
+  exec: 'running',
+  bash: 'running',
+  cron: 'running',
+  web_search: 'searching',
+  web_fetch: 'searching',
+  web_search_brave: 'searching',
+  sessions_spawn: 'spawning',
+};
+
+function getActivityForTool(toolName: string): ActivityCategory {
+  return TOOL_ACTIVITY[toolName.toLowerCase()] ?? 'running';
+}
+
+// ── Transcript event handler ─────────────────────────────────────────────
+
+function handleTranscriptEvents(events: TranscriptEvent[]): void {
+  for (const event of events) {
+    if (event.kind === 'tool_use') {
+      // Detect subagent spawning
+      if (event.name === 'sessions_spawn') {
+        const label = (event.input.label as string) ?? (event.input.task as string)?.slice(0, 30) ?? 'subagent';
+        if (!subagentIds.has(label)) {
+          const id = getOrCreateAgentId(`subagent:${label}`);
+          subagentIds.set(label, id);
+          dispatchToWebview({ type: 'agentCreated', id, folderName: label });
+          dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
+          agentLastActivity.set(id, Date.now());
+          console.log(`[Adapter] Subagent spawned: "${label}" → agent ${id}`);
+        } else {
+          // Already known subagent, mark active again
+          const id = subagentIds.get(label)!;
+          dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
+          agentLastActivity.set(id, Date.now());
+        }
+      }
+
+      // Update main agent activity for any tool call
+      if (mainAgentId !== null) {
+        const activity = getActivityForTool(event.name);
+        const mappedName = mapToolName(event.name);
+        dispatchToWebview({ type: 'agentStatus', id: mainAgentId, status: 'active' });
+        dispatchToWebview({ type: 'agentToolUse', id: mainAgentId, tool: mappedName, activity });
+        agentLastActivity.set(mainAgentId, Date.now());
+      }
+    } else if (event.kind === 'tool_result') {
+      // Check if a subagent completed (sessions_spawn result or subagent_announce)
+      if (event.name === 'subagent_announce' || event.name === 'sessions_spawn') {
+        // Try to find the subagent by matching content
+        // Mark all active subagents as completing if we see a spawn result
+        if (event.name === 'subagent_announce') {
+          // subagent_announce content may contain the label
+          const contentStr = typeof event.content === 'string'
+            ? event.content
+            : JSON.stringify(event.content);
+          for (const [label, id] of subagentIds) {
+            if (contentStr.includes(label)) {
+              dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
+              scheduleSubagentClose(label, id);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function scheduleSubagentClose(label: string, id: number): void {
+  setTimeout(() => {
+    dispatchToWebview({ type: 'agentClosed', id });
+    subagentIds.delete(label);
+    sessionToAgent.delete(`subagent:${label}`);
+    agentToSession.delete(id);
+    agentLastActivity.delete(id);
+    console.log(`[Adapter] Subagent closed: "${label}" → agent ${id}`);
+  }, 5000);
+}
+
+// ── Idle detection timer ─────────────────────────────────────────────────
+
+let idleTimer: ReturnType<typeof setInterval> | null = null;
+
+function startIdleDetection(): void {
+  idleTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [id, lastActive] of agentLastActivity) {
+      if (now - lastActive > IDLE_TIMEOUT_MS) {
+        dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
+      }
+    }
+  }, 3000);
+}
+
+function stopIdleDetection(): void {
+  if (idleTimer) {
+    clearInterval(idleTimer);
+    idleTimer = null;
+  }
+}
+
 // ── Status change handler ───────────────────────────────────────────────
 
 let statusChangeCallback: ((connected: boolean) => void) | null = null;
@@ -71,6 +196,7 @@ export function onConnectionStatusChange(cb: (connected: boolean) => void): void
 // ── Main adapter ────────────────────────────────────────────────────────
 
 let poller: OpenClawPoller | null = null;
+let transcriptWatcher: TranscriptWatcher | null = null;
 
 export function startAdapter(): () => void {
   // Handle outbound messages from the UI
@@ -114,10 +240,19 @@ export function startAdapter(): () => void {
   });
   poller.start();
 
+  // Create transcript watcher (started once we know the transcript path)
+  transcriptWatcher = createTranscriptWatcher(handleTranscriptEvents);
+
+  // Start idle detection
+  startIdleDetection();
+
   return () => {
     unsubOutbound();
     poller?.stop();
     poller = null;
+    transcriptWatcher?.stop();
+    transcriptWatcher = null;
+    stopIdleDetection();
   };
 }
 
@@ -209,6 +344,20 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
     knownSessions.set(session.key, session);
   }
 
+  // Track main agent and start transcript watcher for the first session
+  if (sessions.length > 0 && mainAgentId === null) {
+    const first = sessions[0];
+    mainAgentId = sessionToAgent.get(first.key) ?? null;
+  }
+  // Start transcript watcher on first session with a transcriptPath
+  if (transcriptWatcher && !transcriptWatcher.watching) {
+    const sessionWithTranscript = sessions.find((s) => s.transcriptPath);
+    if (sessionWithTranscript?.transcriptPath) {
+      console.log(`[Adapter] Starting transcript watcher: ${sessionWithTranscript.transcriptPath}`);
+      transcriptWatcher.start(sessionWithTranscript.transcriptPath);
+    }
+  }
+
   // Detect removed sessions
   for (const key of previousKeys) {
     if (!currentKeys.has(key)) {
@@ -217,6 +366,7 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
         dispatchToWebview({ type: 'agentClosed', id });
         sessionToAgent.delete(key);
         agentToSession.delete(id);
+        agentLastActivity.delete(id);
         console.log(`[Adapter] Session removed: ${key} → agent ${id}`);
       }
       knownSessions.delete(key);
@@ -224,16 +374,19 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
   }
 
   // Update activity states based on updatedAt changes
-  // Sessions that were recently updated are "active", others are "waiting"
+  // Only use updatedAt as fallback — transcript watcher provides more granular status
   const now = Date.now();
   for (const session of sessions) {
     const id = sessionToAgent.get(session.key);
     if (id === undefined) continue;
 
+    // Skip if transcript watcher recently updated this agent
+    const lastTranscriptActivity = agentLastActivity.get(id);
+    if (lastTranscriptActivity && now - lastTranscriptActivity < IDLE_TIMEOUT_MS) continue;
+
     const updatedAt = session.updatedAt ?? 0;
     const ageMs = now - updatedAt;
 
-    // If updated in the last 10 seconds, mark as active
     if (ageMs < 10000) {
       dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
     } else {

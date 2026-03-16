@@ -107,6 +107,147 @@ export async function getSessionHistory(
   return [];
 }
 
+// ── File reading (for transcript tailing) ───────────────────────────────
+
+async function readFileChunk(
+  filePath: string,
+  offset: number,
+): Promise<{ text: string; error?: string }> {
+  try {
+    const resp = await toolInvoke('read', { path: filePath, offset });
+    if (!resp.ok) return { text: '', error: resp.error?.message ?? 'read failed' };
+    const textBlock = resp.result?.content?.find((c) => c.type === 'text');
+    return { text: textBlock?.text ?? '' };
+  } catch (err) {
+    return { text: '', error: String(err) };
+  }
+}
+
+// ── Transcript watcher ──────────────────────────────────────────────────
+
+export interface TranscriptToolUse {
+  kind: 'tool_use';
+  name: string;
+  input: Record<string, unknown>;
+}
+
+export interface TranscriptToolResult {
+  kind: 'tool_result';
+  name?: string;
+  toolUseId?: string;
+  content: unknown;
+}
+
+export interface TranscriptText {
+  kind: 'text';
+  text: string;
+}
+
+export type TranscriptEvent = TranscriptToolUse | TranscriptToolResult | TranscriptText;
+export type TranscriptEventHandler = (events: TranscriptEvent[]) => void;
+
+const TRANSCRIPT_POLL_INTERVAL = 1500;
+
+export interface TranscriptWatcher {
+  start(transcriptPath: string): void;
+  stop(): void;
+  readonly watching: boolean;
+}
+
+export function createTranscriptWatcher(
+  onEvents: TranscriptEventHandler,
+): TranscriptWatcher {
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let linesRead = 0;
+  let currentPath: string | null = null;
+  let polling = false;
+
+  async function doPoll() {
+    if (!currentPath || polling) return;
+    polling = true;
+    try {
+      const { text, error } = await readFileChunk(currentPath, linesRead);
+      if (error || !text) {
+        polling = false;
+        return;
+      }
+
+      const lines = text.split('\n').filter((l) => l.trim());
+      if (lines.length === 0) {
+        polling = false;
+        return;
+      }
+      linesRead += lines.length;
+
+      const events: TranscriptEvent[] = [];
+      for (const line of lines) {
+        try {
+          const obj = JSON.parse(line) as Record<string, unknown>;
+          const role = obj.role as string | undefined;
+          const content = obj.content;
+
+          if (!Array.isArray(content)) continue;
+
+          for (const block of content) {
+            const b = block as Record<string, unknown>;
+            if (role === 'assistant' && b.type === 'tool_use') {
+              events.push({
+                kind: 'tool_use',
+                name: b.name as string,
+                input: (b.input as Record<string, unknown>) ?? {},
+              });
+            } else if (role === 'tool' && b.type === 'tool_result') {
+              events.push({
+                kind: 'tool_result',
+                name: b.name as string | undefined,
+                toolUseId: b.tool_use_id as string | undefined,
+                content: b.content,
+              });
+            } else if (role === 'assistant' && b.type === 'text') {
+              events.push({
+                kind: 'text',
+                text: b.text as string,
+              });
+            }
+          }
+        } catch {
+          // skip malformed lines
+        }
+      }
+
+      if (events.length > 0) {
+        onEvents(events);
+      }
+    } catch (err) {
+      console.warn('[TranscriptWatcher] Poll error:', err);
+    }
+    polling = false;
+  }
+
+  return {
+    start(transcriptPath: string) {
+      if (timer && currentPath === transcriptPath) return;
+      this.stop();
+      currentPath = transcriptPath;
+      linesRead = 0;
+      doPoll();
+      timer = setInterval(doPoll, TRANSCRIPT_POLL_INTERVAL);
+    },
+    stop() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      currentPath = null;
+      linesRead = 0;
+      polling = false;
+    },
+    get watching() {
+      return currentPath !== null;
+    },
+  };
+}
+
 // ── Polling-based connection ────────────────────────────────────────────
 
 export type SessionUpdateHandler = (sessions: OpenClawSession[]) => void;
