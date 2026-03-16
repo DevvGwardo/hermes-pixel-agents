@@ -5,12 +5,10 @@
 
 import {
   createPoller,
-  createTranscriptWatcher,
+  getSessionHistory,
   listSessions,
   type OpenClawPoller,
   type OpenClawSession,
-  type TranscriptEvent,
-  type TranscriptWatcher,
 } from './openclawClient.js';
 import { dispatchToWebview, onOutboundMessage } from '../messageBus.js';
 
@@ -105,7 +103,7 @@ function getActivityForTool(toolName: string): ActivityCategory {
   return TOOL_ACTIVITY[toolName.toLowerCase()] ?? 'running';
 }
 
-// ── Transcript event handler ─────────────────────────────────────────────
+// ── History-based tool detection ─────────────────────────────────────────
 
 /** Tool names that indicate subagent spawning (case-insensitive match) */
 const SUBAGENT_TOOL_NAMES = new Set(['agent', 'task', 'sessions_spawn']);
@@ -114,65 +112,100 @@ function isSubagentTool(name: string): boolean {
   return SUBAGENT_TOOL_NAMES.has(name.toLowerCase());
 }
 
+/** Set of tool_use IDs we've already processed, to avoid duplicates */
+const seenToolUseIds = new Set<string>();
+
 /**
- * Handle transcript events for a specific session.
- * @param events - parsed transcript events
- * @param sessionKey - the session key this transcript belongs to
- * @param agentId - the agent ID for this session (fallback to mainAgentId)
+ * Poll session history and process new tool_use blocks for a given session.
  */
-function handleTranscriptEventsForSession(
-  events: TranscriptEvent[],
-  _sessionKey: string,
-  agentId: number | null,
-): void {
-  const ownerAgentId = agentId ?? mainAgentId;
+async function pollHistoryForSession(sessionKey: string, agentId: number | null): Promise<void> {
+  try {
+    const messages = await getSessionHistory(sessionKey, 20, true);
+    const ownerAgentId = agentId ?? mainAgentId;
 
-  for (const event of events) {
-    if (event.kind === 'tool_use') {
-      // Detect subagent spawning from transcript (legacy / inline subagents)
-      if (isSubagentTool(event.name)) {
-        const toolUseId = event.toolUseId ?? `anon-${Date.now()}-${Math.random()}`;
-        const label =
-          (event.input.description as string) ??
-          (event.input.label as string) ??
-          (event.input.task as string)?.slice(0, 40) ??
-          'subagent';
+    for (const msg of messages) {
+      if (msg.role !== 'assistant') continue;
+      const content = msg.content;
+      if (!Array.isArray(content)) continue;
 
-        if (!subagentIds.has(toolUseId)) {
-          const id = getOrCreateAgentId(`subagent:${toolUseId}`);
-          subagentIds.set(toolUseId, id);
-          subagentLabels.set(toolUseId, label);
-          pendingAgentToolUseIds.add(toolUseId);
-          dispatchToWebview({ type: 'agentCreated', id, folderName: label });
-          dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
-          agentLastActivity.set(id, Date.now());
-          console.log(`[Adapter] Subagent spawned: "${label}" (${toolUseId}) → agent ${id}`);
-        } else {
-          const id = subagentIds.get(toolUseId)!;
-          dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
-          agentLastActivity.set(id, Date.now());
+      for (const block of content) {
+        const b = block as Record<string, unknown>;
+        if (b.type !== 'tool_use') continue;
+
+        const toolUseId = b.id as string | undefined;
+        if (!toolUseId || seenToolUseIds.has(toolUseId)) continue;
+        seenToolUseIds.add(toolUseId);
+
+        const toolName = b.name as string;
+        const input = (b.input as Record<string, unknown>) ?? {};
+
+        // Detect subagent spawning
+        if (isSubagentTool(toolName)) {
+          const label =
+            (input.description as string) ??
+            (input.label as string) ??
+            (input.task as string)?.slice(0, 40) ??
+            'subagent';
+
+          if (!subagentIds.has(toolUseId)) {
+            const id = getOrCreateAgentId(`subagent:${toolUseId}`);
+            subagentIds.set(toolUseId, id);
+            subagentLabels.set(toolUseId, label);
+            pendingAgentToolUseIds.add(toolUseId);
+            dispatchToWebview({ type: 'agentCreated', id, folderName: label });
+            dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
+            agentLastActivity.set(id, Date.now());
+            console.log(`[Adapter] Subagent spawned: "${label}" (${toolUseId}) → agent ${id}`);
+          }
+        }
+
+        // Update owning agent activity for non-subagent tool calls
+        if (ownerAgentId !== null && !isSubagentTool(toolName)) {
+          const activity = getActivityForTool(toolName);
+          const mappedName = mapToolName(toolName);
+          dispatchToWebview({ type: 'agentStatus', id: ownerAgentId, status: 'active' });
+          dispatchToWebview({ type: 'agentToolUse', id: ownerAgentId, tool: mappedName, activity });
+          agentLastActivity.set(ownerAgentId, Date.now());
         }
       }
 
-      // Update owning agent activity for non-subagent tool calls
-      if (ownerAgentId !== null && !isSubagentTool(event.name)) {
-        const activity = getActivityForTool(event.name);
-        const mappedName = mapToolName(event.name);
-        dispatchToWebview({ type: 'agentStatus', id: ownerAgentId, status: 'active' });
-        dispatchToWebview({ type: 'agentToolUse', id: ownerAgentId, tool: mappedName, activity });
-        agentLastActivity.set(ownerAgentId, Date.now());
-      }
-    } else if (event.kind === 'tool_result') {
-      const toolUseId = event.toolUseId;
-      if (toolUseId && pendingAgentToolUseIds.has(toolUseId)) {
-        pendingAgentToolUseIds.delete(toolUseId);
-        const id = subagentIds.get(toolUseId);
-        if (id !== undefined) {
-          dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
-          scheduleSubagentClose(toolUseId, id);
+      // Check for tool_result blocks to detect subagent completion
+      for (const block of content) {
+        const b = block as Record<string, unknown>;
+        if (b.type !== 'tool_result') continue;
+        const toolUseId = b.tool_use_id as string | undefined;
+        if (toolUseId && pendingAgentToolUseIds.has(toolUseId)) {
+          pendingAgentToolUseIds.delete(toolUseId);
+          const id = subagentIds.get(toolUseId);
+          if (id !== undefined) {
+            dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
+            scheduleSubagentClose(toolUseId, id);
+          }
         }
       }
     }
+
+    // Also check tool role messages for tool_result blocks
+    for (const msg of messages) {
+      if (msg.role !== 'tool') continue;
+      const content = msg.content;
+      if (!Array.isArray(content)) continue;
+
+      for (const block of content) {
+        const b = block as Record<string, unknown>;
+        const toolUseId = (b.tool_use_id as string) ?? (b.id as string);
+        if (toolUseId && pendingAgentToolUseIds.has(toolUseId)) {
+          pendingAgentToolUseIds.delete(toolUseId);
+          const id = subagentIds.get(toolUseId);
+          if (id !== undefined) {
+            dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
+            scheduleSubagentClose(toolUseId, id);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[Adapter] History poll failed for ${sessionKey}:`, err);
   }
 }
 
@@ -223,8 +256,6 @@ export function onConnectionStatusChange(cb: (connected: boolean) => void): void
 // ── Main adapter ────────────────────────────────────────────────────────
 
 let poller: OpenClawPoller | null = null;
-/** One transcript watcher per session key */
-const transcriptWatchers = new Map<string, TranscriptWatcher>();
 
 export function startAdapter(): () => void {
   // Handle outbound messages from the UI
@@ -275,8 +306,6 @@ export function startAdapter(): () => void {
     unsubOutbound();
     poller?.stop();
     poller = null;
-    for (const watcher of transcriptWatchers.values()) watcher.stop();
-    transcriptWatchers.clear();
     stopIdleDetection();
   };
 }
@@ -390,22 +419,16 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
     mainAgentId = sessionToAgent.get(mainSession.key) ?? null;
   }
 
-  // Start/stop transcript watchers for all sessions with transcriptPaths
-  const activeTranscriptKeys = new Set<string>();
+  // Poll history for recently active sessions to detect tool usage
+  const now2 = Date.now();
   for (const session of sessions) {
-    if (!session.transcriptPath) continue;
-    activeTranscriptKeys.add(session.key);
+    const updatedAt = session.updatedAt ?? 0;
+    // Only poll history for sessions updated in the last 30 seconds
+    if (now2 - updatedAt > 30_000) continue;
 
-    if (!transcriptWatchers.has(session.key)) {
-      const sessionKey = session.key;
-      const agentId = sessionToAgent.get(sessionKey);
-      const watcher = createTranscriptWatcher((events) => {
-        handleTranscriptEventsForSession(events, sessionKey, agentId ?? mainAgentId);
-      });
-      transcriptWatchers.set(session.key, watcher);
-      console.log(`[Adapter] Starting transcript watcher for ${session.key}: ${session.transcriptPath}`);
-      watcher.start(session.transcriptPath);
-    }
+    const agentId = sessionToAgent.get(session.key) ?? null;
+    // Fire and forget — don't block the update loop
+    void pollHistoryForSession(session.key, agentId);
   }
 
   // Detect removed sessions
@@ -420,25 +443,17 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
         console.log(`[Adapter] Session removed: ${key} → agent ${id}`);
       }
       knownSessions.delete(key);
-
-      // Stop transcript watcher for removed session
-      const watcher = transcriptWatchers.get(key);
-      if (watcher) {
-        watcher.stop();
-        transcriptWatchers.delete(key);
-        console.log(`[Adapter] Stopped transcript watcher for ${key}`);
-      }
     }
   }
 
   // Update activity states based on updatedAt changes
-  // Only use updatedAt as fallback — transcript watcher provides more granular status
+  // Only use updatedAt as fallback — history polling provides more granular status
   const now = Date.now();
   for (const session of sessions) {
     const id = sessionToAgent.get(session.key);
     if (id === undefined) continue;
 
-    // Skip if transcript watcher recently updated this agent
+    // Skip if history polling recently updated this agent
     const lastTranscriptActivity = agentLastActivity.get(id);
     if (lastTranscriptActivity && now - lastTranscriptActivity < IDLE_TIMEOUT_MS) continue;
 
