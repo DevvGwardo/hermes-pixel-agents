@@ -398,12 +398,24 @@ async function loadInitialState(): Promise<void> {
       folderNames,
     });
 
-    // Load persisted layout
+    // Load persisted layout, falling back to default layout
     let layout = null;
     try {
       const raw = localStorage.getItem('openclaw-pixel-agents-layout');
       if (raw) layout = JSON.parse(raw);
     } catch { /* ignore */ }
+
+    // If no saved layout, fetch the default one with furniture
+    if (!layout) {
+      try {
+        const res = await fetch('./assets/default-layout-1.json');
+        if (res.ok) {
+          layout = await res.json();
+          localStorage.setItem('openclaw-pixel-agents-layout', JSON.stringify(layout));
+          console.log('[Adapter] Loaded default layout with furniture');
+        }
+      } catch { /* ignore */ }
+    }
 
     dispatchToWebview({
       type: 'layoutLoaded',
@@ -425,6 +437,12 @@ async function loadInitialState(): Promise<void> {
       const raw = localStorage.getItem('openclaw-pixel-agents-layout');
       if (raw) layout = JSON.parse(raw);
     } catch { /* ignore */ }
+    if (!layout) {
+      try {
+        const res = await fetch('./assets/default-layout-1.json');
+        if (res.ok) layout = await res.json();
+      } catch { /* ignore */ }
+    }
     dispatchToWebview({ type: 'layoutLoaded', layout, wasReset: false });
   }
 }
