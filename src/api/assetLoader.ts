@@ -389,6 +389,22 @@ async function loadDefaultLayout(): Promise<Record<string, unknown> | null> {
  * Called once at startup. Assets are loaded in the correct order:
  * characters → floors → walls → furniture → layout
  */
+let _assetsReady = false;
+let _assetsReadyResolve: (() => void) | null = null;
+const _assetsReadyPromise = new Promise<void>((resolve) => {
+  _assetsReadyResolve = resolve;
+});
+
+/** Returns a promise that resolves when all assets have been loaded */
+export function waitForAssets(): Promise<void> {
+  return _assetsReadyPromise;
+}
+
+/** Check if assets are loaded (synchronous) */
+export function assetsReady(): boolean {
+  return _assetsReady;
+}
+
 export async function loadAllAssets(): Promise<void> {
   // Load in correct order (characters first, layout last)
   await loadCharacterSprites();
@@ -396,8 +412,7 @@ export async function loadAllAssets(): Promise<void> {
   await loadWallTiles();
   await loadFurniture();
 
-  // Layout is dispatched by the adapter after assets are ready,
-  // but we prepare the default layout here if none is saved.
+  // Prepare default layout if none is saved
   const savedLayout = localStorage.getItem('openclaw-pixel-agents-layout');
   if (!savedLayout) {
     const defaultLayout = await loadDefaultLayout();
@@ -405,4 +420,8 @@ export async function loadAllAssets(): Promise<void> {
       localStorage.setItem('openclaw-pixel-agents-layout', JSON.stringify(defaultLayout));
     }
   }
+
+  // Signal that assets are ready
+  _assetsReady = true;
+  _assetsReadyResolve?.();
 }

@@ -11,6 +11,7 @@ import {
   type OpenClawSession,
 } from './openclawClient.js';
 import { dispatchToWebview, onOutboundMessage } from '../messageBus.js';
+import { waitForAssets } from './assetLoader.js';
 
 // ── Tool name mapping ───────────────────────────────────────────────────
 
@@ -361,6 +362,10 @@ export function startAdapter(): () => void {
 // ── Initial state loading ───────────────────────────────────────────────
 
 async function loadInitialState(): Promise<void> {
+  // Wait for all assets (characters, furniture, floors, walls) to load
+  // before sending layout + agents, so desks are recognized as seats
+  await waitForAssets();
+
   try {
     const sessions = await listSessions(50);
     const agentIds: number[] = [];
