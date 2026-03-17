@@ -103,6 +103,39 @@ function getActivityForTool(toolName: string): ActivityCategory {
   return TOOL_ACTIVITY[toolName.toLowerCase()] ?? 'running';
 }
 
+/** Format a tool call into a human-readable status string */
+function formatToolStatus(toolName: string, input: Record<string, unknown>): string {
+  const basename = (p: unknown) => (typeof p === 'string' ? p.split(/[/\\]/).pop() ?? p : '');
+  switch (toolName.toLowerCase()) {
+    case 'read':
+      return `Reading ${basename(input.file_path ?? input.path)}`;
+    case 'write':
+      return `Writing ${basename(input.file_path ?? input.path)}`;
+    case 'edit':
+      return `Editing ${basename(input.file_path ?? input.path)}`;
+    case 'exec':
+    case 'bash': {
+      const cmd = (input.command as string) ?? '';
+      return `Running: ${cmd.length > 40 ? cmd.slice(0, 37) + '…' : cmd}`;
+    }
+    case 'web_search':
+    case 'web_search_brave':
+      return `Searching: ${(input.query as string)?.slice(0, 30) ?? 'web'}`;
+    case 'web_fetch':
+      return `Fetching: ${basename(input.url)}`;
+    case 'sessions_spawn':
+      return `Spawning: ${(input.task as string)?.slice(0, 30) ?? 'subagent'}`;
+    case 'memory_search':
+      return `Searching memory`;
+    case 'image':
+      return 'Analyzing image';
+    case 'cron':
+      return 'Managing cron job';
+    default:
+      return `Using ${mapToolName(toolName)}`;
+  }
+}
+
 // ── History-based tool detection ─────────────────────────────────────────
 
 /** Tool names that indicate subagent spawning (case-insensitive match) */
@@ -154,6 +187,13 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
             pendingAgentToolUseIds.add(toolUseId);
             dispatchToWebview({ type: 'agentCreated', id, folderName: label });
             dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
+            // Show the task as a tool overlay label above the character
+            dispatchToWebview({
+              type: 'agentToolStart',
+              id,
+              toolId: toolUseId,
+              status: `Subtask: ${label}`,
+            });
             agentLastActivity.set(id, Date.now());
             console.log(`[Adapter] Subagent spawned: "${label}" (${toolUseId}) → agent ${id}`);
           }
@@ -165,6 +205,14 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
           const mappedName = mapToolName(toolName);
           dispatchToWebview({ type: 'agentStatus', id: ownerAgentId, status: 'active' });
           dispatchToWebview({ type: 'agentToolUse', id: ownerAgentId, tool: mappedName, activity });
+          // Show tool name as overlay label above character
+          const statusText = formatToolStatus(toolName, input);
+          dispatchToWebview({
+            type: 'agentToolStart',
+            id: ownerAgentId,
+            toolId: toolUseId,
+            status: statusText,
+          });
           agentLastActivity.set(ownerAgentId, Date.now());
         }
       }
