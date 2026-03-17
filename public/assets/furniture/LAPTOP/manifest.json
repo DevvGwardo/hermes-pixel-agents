@@ -1,0 +1,14 @@
+{
+  "id": "LAPTOP",
+  "name": "Laptop",
+  "category": "desks",
+  "type": "asset",
+  "file": "LAPTOP.png",
+  "width": 32,
+  "height": 32,
+  "footprintW": 2,
+  "footprintH": 2,
+  "canPlaceOnWalls": false,
+  "canPlaceOnSurfaces": true,
+  "backgroundTiles": 0
+}
