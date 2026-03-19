@@ -400,6 +400,17 @@ export function useExtensionMessages(
         setSubagentCharacters((prev) =>
           prev.filter((s) => !(s.parentAgentId === id && s.parentToolId === parentToolId)),
         );
+        // Discard any buffered subagentToolStart events for this agent + parentToolId
+        const buffered = pendingSubagentTools.current.get(id);
+        if (buffered) {
+          pendingSubagentTools.current.set(
+            id,
+            buffered.filter((e) => e.parentToolId !== parentToolId),
+          );
+          if (pendingSubagentTools.current.get(id)!.length === 0) {
+            pendingSubagentTools.current.delete(id);
+          }
+        }
       } else if (msg.type === 'characterSpritesLoaded') {
         const characters = msg.characters as Array<{
           down: string[][][];
