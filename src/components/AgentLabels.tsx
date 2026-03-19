@@ -65,12 +65,15 @@ export function AgentLabels({
         // Character position: device pixels → CSS pixels (follow sitting offset)
         const sittingOffset = ch.state === CharacterState.TYPE ? 6 : 0;
         const screenX = (deviceOffsetX + ch.x * zoom) / dpr;
-        const screenY = (deviceOffsetY + (ch.y + sittingOffset - 24) * zoom) / dpr;
 
+        const isSub = ch.isSubagent;
         const status = agentStatuses[id];
         const isWaiting = status === 'waiting';
         const isActive = ch.isActive;
-        const isSub = ch.isSubagent;
+
+        // Subagent labels get a small vertical nudge so they don't overlap the parent label
+        const subYOffset = isSub ? -20 : 0;
+        const screenY = (deviceOffsetY + (ch.y + sittingOffset - 24) * zoom) / dpr + subYOffset;
 
         let dotColor = 'transparent';
         if (isWaiting) {
