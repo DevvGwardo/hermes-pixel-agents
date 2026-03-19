@@ -770,10 +770,9 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
 
     const ageMs = now - updatedAt;
 
-    // Use a longer idle threshold for subagent sessions — they may have gaps
-    // between tool calls while the LLM is thinking
-    const isSubagent = session.key.includes(':subagent:');
-    const idleThreshold = isSubagent ? 30_000 : 10_000;
+    // All sessions use the same idle threshold — subagent sessions that have
+    // their own :subagent: key are tracked via session updatedAt like any other.
+    const idleThreshold = IDLE_TIMEOUT_MS;
 
     // Only mark active if updatedAt genuinely changed since last poll
     const hasNewActivity = updatedAt > prevUpdatedAt;
