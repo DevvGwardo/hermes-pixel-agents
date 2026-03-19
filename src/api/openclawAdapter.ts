@@ -683,18 +683,58 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
 
       if (isSubagent) {
         const parts = session.key.split(':subagent:');
-        const parentKey = parts[0] + ':main';
-        const parentId = sessionToAgent.get(parentKey);
+        const parentKeyRaw = parts[0];
+        const parentKeyExact = parentKeyRaw + ':main';
+        let parentId: number | undefined = sessionToAgent.get(parentKeyExact);
+
+        // Fallback: try stripping provider prefixes from the subagent key to find the parent.
+        // Different providers use different separators in session keys (e.g., `kimi-coding/k2p5`,
+        // `minimax`, `provider/model-name`). Normalize common separators to underscores/hyphens
+        // and try alternate parent key forms.
+        if (parentId === undefined) {
+          const normalizedBase = parentKeyRaw
+            .replace(/\//g, '_')  // slash → underscore
+            .replace(/-/g, '_')   // hyphen → underscore
+            .replace(/\./g, '_'); // dot → underscore
+          const normalizedParentKey = normalizedBase + ':main';
+          parentId = sessionToAgent.get(normalizedParentKey);
+
+          if (parentId !== undefined) {
+            console.log(
+              `[Adapter] Subagent parent found via normalization: "${session.key}" | exact key "${parentKeyExact}" not found, normalized "${normalizedParentKey}" → agent ${parentId}`,
+            );
+          }
+        }
+
+        // Second fallback: iterate all known main sessions and try stripping the provider
+        // prefix (everything up to and including the last colon) from the subagent key.
+        if (parentId === undefined) {
+          const baseProvider = parentKeyRaw.split(':')[0]; // e.g. "kimi-coding/k2p5" or "minimax"
+          for (const [knownKey, knownId] of sessionToAgent) {
+            if (knownKey.endsWith(':main') && knownKey.startsWith(baseProvider)) {
+              parentId = knownId;
+              console.log(
+                `[Adapter] Subagent parent found via provider prefix match: "${session.key}" | baseProvider="${baseProvider}" matched key "${knownKey}" → agent ${parentId}`,
+              );
+              break;
+            }
+          }
+        }
+
         // Track parent relationship for cleanup
         if (parentId !== undefined) {
           subagentParent.set(id, parentId);
+          console.log(
+            `[Adapter] Subagent session detected: ${session.key} → agent ${id} (parent: ${parentKeyExact} → ${parentId})`,
+          );
+        } else {
+          console.warn(
+            `[Adapter] Subagent session detected but parent NOT found: ${session.key} | tried keys: "${parentKeyExact}", normalized variants of "${parentKeyRaw}"`,
+          );
         }
         agentLastStatus.set(id, 'active');
         dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
         agentLastActivity.set(id, Date.now());
-        console.log(
-          `[Adapter] Subagent session detected: ${session.key} → agent ${id} (parent: ${parentKey} → ${parentId ?? 'unknown'})`,
-        );
       } else {
         console.log(`[Adapter] New session detected: ${session.key} → agent ${id}`);
       }

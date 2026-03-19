@@ -34,6 +34,12 @@ import { CharacterState, Direction, MATRIX_EFFECT_DURATION, TILE_SIZE } from '..
 import { createCharacter, updateCharacter } from './characters.js';
 import { matrixEffectSeeds } from './matrixEffect.js';
 
+// Sub-agent hue shifts (added on top of parent's hueShift for visual distinction)
+// These shifts are applied modulo 360 to stay within the valid hue range.
+const SUBAGENT_HUE_BLUE_SHIFT = 180;   // Kimi-based subagents (blue)
+const SUBAGENT_HUE_ORANGE_SHIFT = 30;  // MiniMax-based subagents (warm/orange)
+const SUBAGENT_HUE_PURPLE_SHIFT = 270; // Other subagents (neutral purple)
+
 export class OfficeState {
   layout: OfficeLayout;
   tileMap: TileTypeVal[][];
@@ -418,7 +424,16 @@ export class OfficeState {
     const id = this.nextSubagentId--;
     const parentCh = this.characters.get(parentAgentId);
     const palette = parentCh ? parentCh.palette : 0;
-    const hueShift = parentCh ? parentCh.hueShift : 0;
+    // Apply a provider-specific hue shift so subagents are visually distinct from their parent.
+    let hueShift = parentCh ? parentCh.hueShift : 0;
+    const toolIdLower = parentToolId.toLowerCase();
+    if (toolIdLower.includes('kimi')) {
+      hueShift = (hueShift + SUBAGENT_HUE_BLUE_SHIFT) % 360;
+    } else if (toolIdLower.includes('minimax') || toolIdLower.includes('m2.7')) {
+      hueShift = (hueShift + SUBAGENT_HUE_ORANGE_SHIFT) % 360;
+    } else {
+      hueShift = (hueShift + SUBAGENT_HUE_PURPLE_SHIFT) % 360;
+    }
 
     // Find the free seat closest to the parent agent
     const parentCol = parentCh ? parentCh.tileCol : 0;
