@@ -227,6 +227,7 @@ export class OfficeState {
     preferredSeatId?: string,
     skipSpawnEffect?: boolean,
     folderName?: string,
+    model?: string,
   ): void {
     if (this.characters.has(id)) return;
 
@@ -235,6 +236,23 @@ export class OfficeState {
     if (preferredPalette !== undefined) {
       palette = preferredPalette;
       hueShift = preferredHueShift ?? 0;
+    } else if (model) {
+      // Use model to determine visual swarm distinction
+      const modelLower = model.toLowerCase();
+      if (modelLower.includes('kimi')) {
+        // Kimi swarm: palette 0-2 (blues/teals)
+        palette = Math.floor(Math.random() * 3);
+        hueShift = 0;
+      } else if (modelLower.includes('minimax') || modelLower.includes('m2.7')) {
+        // MiniMax swarm: palette 3-5 (warmer tones)
+        palette = 3 + Math.floor(Math.random() * 3);
+        hueShift = 0;
+      } else {
+        // Other models: use diverse palette selection
+        const pick = this.pickDiversePalette();
+        palette = pick.palette;
+        hueShift = pick.hueShift;
+      }
     } else {
       const pick = this.pickDiversePalette();
       palette = pick.palette;

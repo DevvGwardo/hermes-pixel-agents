@@ -34,6 +34,8 @@ interface WallMonitorProps {
   widthTiles?: number;
   /** Height in tiles */
   heightTiles?: number;
+  /** YouTube video ID to display on the monitor (loops automatically) */
+  youtubeVideoId?: string;
 }
 
 export function WallMonitor({
@@ -47,6 +49,7 @@ export function WallMonitor({
   tileRow,
   widthTiles = 6,
   heightTiles = 4,
+  youtubeVideoId,
 }: WallMonitorProps) {
   const [lines, setLines] = useState<ActivityLine[]>([]);
   const [, setTick] = useState(0);
@@ -347,100 +350,123 @@ export function WallMonitor({
           boxShadow: '0 0 12px rgba(60, 140, 255, 0.2), inset 0 0 30px rgba(0, 20, 40, 0.5)',
         }}
       >
-        {/* Title bar */}
-        <div
-          style={{
-            padding: '3px 6px',
-            borderBottom: '1px solid #1a3a5a',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            flexShrink: 0,
-          }}
-        >
-          <span
-            style={{
-              width: 5,
-              height: 5,
-              borderRadius: '50%',
-              background: '#5ac88c',
-              flexShrink: 0,
-            }}
-          />
-          <span
-            style={{
-              fontSize: Math.max(10, screenH * 0.1) + 'px',
-              color: '#5a8cff',
-              letterSpacing: '1.5px',
-              textTransform: 'uppercase',
-              fontWeight: 'bold',
-            }}
-          >
-            Live Activity
-          </span>
-        </div>
-
-        {/* Content area */}
-        <div
-          style={{
-            flex: 1,
-            padding: '3px 6px',
-            overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 2,
-          }}
-        >
-          {lines.length === 0 && statusLines.length === 0 && (
+        {youtubeVideoId ? (
+          /* YouTube video mode — fill the entire screen */
+          <div style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+            <iframe
+              src={`https://www.youtube.com/embed/${youtubeVideoId}?autoplay=1&mute=1&loop=1&playlist=${youtubeVideoId}&controls=0&showinfo=0&rel=0&modestbranding=1&playsinline=1&disablekb=1`}
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                width: '300%',
+                height: '300%',
+                transform: 'translate(-50%, -50%)',
+                border: 'none',
+                pointerEvents: 'none',
+              }}
+              allow="autoplay; encrypted-media"
+              title="Wall Monitor Video"
+            />
+          </div>
+        ) : (
+          <>
+            {/* Title bar */}
             <div
               style={{
-                color: '#2a4a3a',
-                fontSize: Math.max(7, screenH * 0.07) + 'px',
-                padding: '4px 0',
+                padding: '3px 6px',
+                borderBottom: '1px solid #1a3a5a',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                flexShrink: 0,
               }}
             >
-              No agents online
-            </div>
-          )}
-          {lines.length === 0 && statusLines.map((sl) => (
-            <div
-              key={sl.id}
-              style={{
-                fontSize: Math.max(10, screenH * 0.11) + 'px',
-                color: sl.isActive ? '#a0f0c8' : '#70b898',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                lineHeight: 1.5,
-                textShadow: sl.isActive ? '0 0 4px rgba(140,255,180,0.3)' : 'none',
-              }}
-            >
-              {sl.isActive ? '\u25CF' : '\u25CB'} {sl.text}
-            </div>
-          ))}
-          {lines.map((line) => {
-            const age = Date.now() - line.timestamp;
-            const opacity = age > LINE_LIFETIME_MS - 3000
-              ? Math.max(0.15, 1 - (age - (LINE_LIFETIME_MS - 3000)) / 3000)
-              : 1;
-            return (
-              <div
-                key={line.id}
-                className="wall-monitor-line"
+              <span
                 style={{
-                  fontSize: Math.max(7, screenH * 0.07) + 'px',
-                  color: `rgba(140, 220, 180, ${opacity})`,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  lineHeight: 1.4,
+                  width: 5,
+                  height: 5,
+                  borderRadius: '50%',
+                  background: '#5ac88c',
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                style={{
+                  fontSize: Math.max(10, screenH * 0.1) + 'px',
+                  color: '#5a8cff',
+                  letterSpacing: '1.5px',
+                  textTransform: 'uppercase',
+                  fontWeight: 'bold',
                 }}
               >
-                {line.text}
-              </div>
-            );
-          })}
-        </div>
+                Live Activity
+              </span>
+            </div>
+
+            {/* Content area */}
+            <div
+              style={{
+                flex: 1,
+                padding: '3px 6px',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+              }}
+            >
+              {lines.length === 0 && statusLines.length === 0 && (
+                <div
+                  style={{
+                    color: '#2a4a3a',
+                    fontSize: Math.max(7, screenH * 0.07) + 'px',
+                    padding: '4px 0',
+                  }}
+                >
+                  No agents online
+                </div>
+              )}
+              {lines.length === 0 && statusLines.map((sl) => (
+                <div
+                  key={sl.id}
+                  style={{
+                    fontSize: Math.max(10, screenH * 0.11) + 'px',
+                    color: sl.isActive ? '#a0f0c8' : '#70b898',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    lineHeight: 1.5,
+                    textShadow: sl.isActive ? '0 0 4px rgba(140,255,180,0.3)' : 'none',
+                  }}
+                >
+                  {sl.isActive ? '\u25CF' : '\u25CB'} {sl.text}
+                </div>
+              ))}
+              {lines.map((line) => {
+                const age = Date.now() - line.timestamp;
+                const opacity = age > LINE_LIFETIME_MS - 3000
+                  ? Math.max(0.15, 1 - (age - (LINE_LIFETIME_MS - 3000)) / 3000)
+                  : 1;
+                return (
+                  <div
+                    key={line.id}
+                    className="wall-monitor-line"
+                    style={{
+                      fontSize: Math.max(7, screenH * 0.07) + 'px',
+                      color: `rgba(140, 220, 180, ${opacity})`,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {line.text}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {/* Scanline effect */}
         <div

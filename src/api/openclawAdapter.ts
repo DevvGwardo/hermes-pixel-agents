@@ -33,6 +33,8 @@ const TOOL_NAME_MAP: Record<string, string> = {
   sessions_send: 'Task',
   kimi_delegate: 'Task',
   kimi_research: 'Task',
+  minimax_delegate: 'Task',
+  minimax_research: 'Task',
   image: 'WebFetch',
   memory_search: 'Grep',
   memory_get: 'Read',
@@ -61,6 +63,8 @@ let nextAgentId = 1;
 const sessionToAgent = new Map<string, number>();
 const agentToSession = new Map<number, string>();
 const knownSessions = new Map<string, OpenClawSession>();
+/** Tracks the model (e.g., 'kimi-coding/k2p5', 'minimax/MiniMax-M2.7') per agent ID */
+const agentModels = new Map<number, string>();
 
 function getOrCreateAgentId(sessionKey: string): number {
   let id = sessionToAgent.get(sessionKey);
@@ -119,6 +123,8 @@ const TOOL_ACTIVITY: Record<string, ActivityCategory> = {
   task: 'spawning',
   kimi_delegate: 'spawning',
   kimi_research: 'searching',
+  minimax_delegate: 'spawning',
+  minimax_research: 'searching',
 };
 
 /** Normalize MCP-prefixed tool names to their base name (e.g. mcp__kimi__kimi_delegate → kimi_delegate) */
@@ -163,6 +169,10 @@ function formatToolStatus(toolName: string, input: Record<string, unknown>): str
       return `Delegating: ${(input.description as string)?.slice(0, 30) ?? (input.task as string)?.slice(0, 30) ?? 'Kimi task'}`;
     case 'kimi_research':
       return `Researching: ${(input.query as string)?.slice(0, 30) ?? (input.topic as string)?.slice(0, 30) ?? 'Kimi research'}`;
+    case 'minimax_delegate':
+      return `Delegating: ${(input.description as string)?.slice(0, 30) ?? (input.task as string)?.slice(0, 30) ?? 'MiniMax task'}`;
+    case 'minimax_research':
+      return `Researching: ${(input.query as string)?.slice(0, 30) ?? (input.topic as string)?.slice(0, 30) ?? 'MiniMax research'}`;
     case 'memory_search':
       return `Searching memory`;
     case 'image':
@@ -179,7 +189,7 @@ function formatToolStatus(toolName: string, input: Record<string, unknown>): str
 /** Tool names that indicate subagent spawning (case-insensitive match) */
 const SUBAGENT_TOOL_NAMES = new Set([
   'agent', 'task', 'sessions_spawn', 'sessions_send',
-  'kimi_delegate',
+  'kimi_delegate', 'minimax_delegate',
 ]);
 
 /** Patterns in tool names that indicate delegation/subagent work */
@@ -574,12 +584,19 @@ async function loadInitialState(): Promise<void> {
       }
     }
 
-    // Send existing agents with display names as folder labels
+    // Send existing agents with display names as folder labels and model info
     const folderNames: Record<number, string> = {};
+    const agentModelInfo: Record<number, string> = {};
     for (const session of sessions) {
       const id = sessionToAgent.get(session.key);
-      if (id !== undefined && session.displayName) {
-        folderNames[id] = session.displayName;
+      if (id !== undefined) {
+        if (session.displayName) {
+          folderNames[id] = session.displayName;
+        }
+        if (session.model) {
+          agentModelInfo[id] = session.model;
+          agentModels.set(id, session.model);
+        }
       }
     }
 
@@ -588,6 +605,7 @@ async function loadInitialState(): Promise<void> {
       agents: agentIds,
       agentMeta,
       folderNames,
+      agentModels: agentModelInfo,
     });
 
     // Load persisted layout, falling back to default layout
@@ -655,7 +673,13 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
       const id = getOrCreateAgentId(session.key);
       const isSubagent = session.key.includes(':subagent:');
       const folderName = session.displayName ?? session.key;
-      dispatchToWebview({ type: 'agentCreated', id, folderName });
+      
+      // Track model for swarm distinction
+      if (session.model) {
+        agentModels.set(id, session.model);
+      }
+      
+      dispatchToWebview({ type: 'agentCreated', id, folderName, model: session.model });
 
       if (isSubagent) {
         const parts = session.key.split(':subagent:');

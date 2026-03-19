@@ -260,20 +260,37 @@ function App() {
 
       {!isDebugMode && <EventFeed events={events} />}
 
-      {!isDebugMode && !editor.isEditMode && (
-        <WallMonitor
-          officeState={officeState}
-          agents={agents}
-          agentTools={agentTools}
-          containerRef={containerRef}
-          zoom={editor.zoom}
-          panRef={editor.panRef}
-          tileCol={11}
-          tileRow={5}
-          widthTiles={10}
-          heightTiles={4}
-        />
-      )}
+      {!isDebugMode && !editor.isEditMode && (() => {
+        const videos = [
+          { id: 'jclhVKSC0Tk', label: 'Night of the Living Dead' },
+          { id: 'FC6jFoYm3xs', label: 'Nosferatu' },
+          { id: 'X-S5v4UwhAE', label: 'Metropolis' },
+          { id: 'kmYcT5gT6a4', label: 'His Girl Friday' },
+        ];
+        const cols = officeState.getLayout().cols;
+        const gap = 1;
+        const totalGaps = (videos.length - 1) * gap;
+        const usableCols = cols - 2 - totalGaps; // -2 for wall margins
+        const screenW = Math.floor(usableCols / videos.length);
+        return (<>
+          {videos.map((v, i) => (
+            <WallMonitor
+              key={v.id}
+              officeState={officeState}
+              agents={agents}
+              agentTools={agentTools}
+              containerRef={containerRef}
+              zoom={editor.zoom}
+              panRef={editor.panRef}
+              tileCol={1 + i * (screenW + gap)}
+              tileRow={3}
+              widthTiles={screenW}
+              heightTiles={6}
+              youtubeVideoId={v.id}
+            />
+          ))}
+        </>);
+      })()}
 
       {/* Vignette overlay */}
       <div
