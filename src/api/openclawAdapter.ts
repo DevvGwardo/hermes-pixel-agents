@@ -285,22 +285,14 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
             // If so, just track the tool_use ID for completion detection — don't create
             // a duplicate character.
             const parentId = ownerAgentId ?? mainAgentId ?? 0;
-            const parentSession = agentToSession.get(parentId);
             let sessionSubagentId: number | undefined;
-            if (parentSession) {
-              // Collect IDs already linked to a tool_use to avoid double-linking
-              const alreadyLinked = new Set<number>();
-              for (const linkedId of subagentIds.values()) {
-                alreadyLinked.add(linkedId);
-              }
-              // Look for any :subagent: session under this parent that hasn't been linked yet
-              for (const [key, id] of sessionToAgent) {
-                if (key.startsWith(parentSession.replace(':main', '')) && key.includes(':subagent:')) {
-                  if (!alreadyLinked.has(id) && agentLastActivity.has(id)) {
-                    sessionSubagentId = id;
-                    break;
-                  }
-                }
+            // subagentParent maps subagent character ID → parent agent ID.
+            // If any entry has value === parentId, a session-based subagent for this parent
+            // already exists — don't create a duplicate via agentToolStart.
+            for (const [subId, mappedParent] of subagentParent) {
+              if (mappedParent === parentId) {
+                sessionSubagentId = subId;
+                break;
               }
             }
 
@@ -400,7 +392,9 @@ function completeSubagentTool(toolUseId: string): void {
   const label = subagentLabels.get(toolUseId) ?? toolUseId;
 
   // Check if this was a session-based subagent (has its own agent ID) or
-  // a history-based subagent (tracked via parent's Subtask: tool)
+  // a history-based subagent (tracked via parent's Subtask: tool).
+  // subagentParent maps subagent character ID → parent agent ID.
+  // parentId is session-based when it appears as a KEY in subagentParent.
   const isSessionBased = subagentParent.has(parentId);
 
   if (isSessionBased) {
