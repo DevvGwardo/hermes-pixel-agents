@@ -8,6 +8,7 @@ interface AgentLabelsProps {
   officeState: OfficeState;
   agents: number[];
   agentStatuses: Record<number, string>;
+  agentModels: Record<number, string>;
   containerRef: React.RefObject<HTMLDivElement | null>;
   zoom: number;
   panRef: React.RefObject<{ x: number; y: number }>;
@@ -18,6 +19,7 @@ export function AgentLabels({
   officeState,
   agents,
   agentStatuses,
+  agentModels,
   containerRef,
   zoom,
   panRef,
@@ -84,6 +86,17 @@ export function AgentLabels({
 
         const labelText = subLabelMap.get(id) || `Agent #${id}`;
 
+        // Color-code subagent labels by provider
+        let labelColor = 'var(--pixel-text)';
+        if (isSub) {
+          const model = agentModels[id] ?? '';
+          if (model.includes('kimi')) {
+            labelColor = '#60a5fa';
+          } else if (model.includes('minimax')) {
+            labelColor = '#4ade80';
+          }
+        }
+
         return (
           <div
             key={id}
@@ -115,7 +128,7 @@ export function AgentLabels({
               style={{
                 fontSize: isSub ? '16px' : '18px',
                 fontStyle: isSub ? 'italic' : undefined,
-                color: 'var(--pixel-text)',
+                color: labelColor,
                 background: 'rgba(30,30,46,0.7)',
                 padding: '1px 4px',
                 borderRadius: 2,

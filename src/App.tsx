@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 import { AgentGrid } from './components/AgentGrid.js';
+import { AgentLabels } from './components/AgentLabels.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { DebugView } from './components/DebugView.js';
 import { EventFeed, useEventFeed } from './components/EventFeed.js';
@@ -136,6 +137,7 @@ function App() {
     selectedAgent,
     agentTools,
     agentStatuses,
+    agentModels,
     subagentTools,
     subagentCharacters,
     layoutReady,
@@ -254,6 +256,17 @@ function App() {
         zoom={editor.zoom}
         onZoomChange={editor.handleZoomChange}
         panRef={editor.panRef}
+      />
+
+      <AgentLabels
+        officeState={officeState}
+        agents={agents}
+        agentStatuses={agentStatuses}
+        agentModels={agentModels}
+        containerRef={containerRef}
+        zoom={editor.zoom}
+        panRef={editor.panRef}
+        subagentCharacters={subagentCharacters}
       />
 
       {!isDebugMode && <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />}
