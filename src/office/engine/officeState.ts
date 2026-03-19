@@ -91,11 +91,11 @@ export class OfficeState {
       seat.assigned = false;
     }
 
-    // First pass: try to keep characters at their existing seats
+    // First pass: try to keep characters at their existing desk seats
     for (const ch of this.characters.values()) {
       if (ch.seatId && this.seats.has(ch.seatId)) {
         const seat = this.seats.get(ch.seatId)!;
-        if (!seat.assigned) {
+        if (!seat.assigned && seat.facesDesk) {
           seat.assigned = true;
           // Snap character to seat position
           ch.tileCol = seat.seatCol;
@@ -175,10 +175,22 @@ export class OfficeState {
   }
 
   private findFreeSeat(): string | null {
+    // Find the best unassigned seat by workstation priority (highest first)
+    let bestUid: string | null = null;
+    let bestPriority = -1;
     for (const [uid, seat] of this.seats) {
-      if (!seat.assigned) return uid;
+      if (!seat.assigned && seat.deskPriority > bestPriority) {
+        bestPriority = seat.deskPriority;
+        bestUid = uid;
+      }
     }
-    return null;
+    // If no workstation seats, fall back to any free seat
+    if (!bestUid) {
+      for (const [uid, seat] of this.seats) {
+        if (!seat.assigned) return uid;
+      }
+    }
+    return bestUid;
   }
 
   /**
@@ -229,11 +241,11 @@ export class OfficeState {
       hueShift = pick.hueShift;
     }
 
-    // Try preferred seat first, then any free seat
+    // Try preferred seat first (only if it faces a desk), then any free seat
     let seatId: string | null = null;
     if (preferredSeatId && this.seats.has(preferredSeatId)) {
       const seat = this.seats.get(preferredSeatId)!;
-      if (!seat.assigned) {
+      if (!seat.assigned && seat.facesDesk) {
         seatId = preferredSeatId;
       }
     }
@@ -395,14 +407,29 @@ export class OfficeState {
     const parentRow = parentCh ? parentCh.tileRow : 0;
     const dist = (c: number, r: number) => Math.abs(c - parentCol) + Math.abs(r - parentRow);
 
+    // Prefer highest-priority desk seats closest to parent, fall back to any seat
     let bestSeatId: string | null = null;
+    let bestPriority = -1;
     let bestDist = Infinity;
     for (const [uid, seat] of this.seats) {
-      if (!seat.assigned) {
+      if (!seat.assigned && seat.deskPriority > 0) {
         const d = dist(seat.seatCol, seat.seatRow);
-        if (d < bestDist) {
+        if (seat.deskPriority > bestPriority || (seat.deskPriority === bestPriority && d < bestDist)) {
+          bestPriority = seat.deskPriority;
           bestDist = d;
           bestSeatId = uid;
+        }
+      }
+    }
+    if (!bestSeatId) {
+      bestDist = Infinity;
+      for (const [uid, seat] of this.seats) {
+        if (!seat.assigned) {
+          const d = dist(seat.seatCol, seat.seatRow);
+          if (d < bestDist) {
+            bestDist = d;
+            bestSeatId = uid;
+          }
         }
       }
     }
@@ -536,7 +563,7 @@ export class OfficeState {
     // Collect tiles where active agents face desks
     const autoOnTiles = new Set<string>();
     for (const ch of this.characters.values()) {
-      if (!ch.isActive || !ch.seatId) continue;
+      if (ch.state !== CharacterState.TYPE || !ch.seatId) continue;
       const seat = this.seats.get(ch.seatId);
       if (!seat) continue;
       // Find the desk tile(s) the agent faces from their seat
@@ -653,6 +680,7 @@ export class OfficeState {
     }
 
     const toDelete: number[] = [];
+    let needFurnitureRebuild = false;
     for (const ch of this.characters.values()) {
       // Handle matrix effect animation
       if (ch.matrixEffect) {
@@ -672,9 +700,14 @@ export class OfficeState {
       }
 
       // Temporarily unblock own seat so character can pathfind to it
+      const prevState = ch.state;
       this.withOwnSeatUnblocked(ch, () =>
         updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles),
       );
+      // When an active agent sits down at their desk, rebuild furniture to turn on electronics
+      if (ch.isActive && ch.state === CharacterState.TYPE && prevState !== CharacterState.TYPE) {
+        needFurnitureRebuild = true;
+      }
 
       // Tick bubble timer for waiting bubbles
       if (ch.bubbleType === 'waiting') {
@@ -688,6 +721,10 @@ export class OfficeState {
     // Remove characters that finished despawn
     for (const id of toDelete) {
       this.characters.delete(id);
+    }
+    // Rebuild furniture if any agent just sat down (turns on nearby electronics)
+    if (needFurnitureRebuild) {
+      this.rebuildFurnitureInstances();
     }
   }
 

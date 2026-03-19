@@ -174,7 +174,7 @@ export function DebugView({
         left: 0,
         width: '100%',
         height: '100%',
-        background: 'var(--vscode-editor-background)',
+        background: 'var(--pixel-bg)',
         zIndex: DEBUG_Z,
         overflow: 'auto',
       }}

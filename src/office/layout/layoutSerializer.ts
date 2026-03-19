@@ -163,14 +163,21 @@ function orientationToFacing(orientation: string): Direction {
 export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
   const seats = new Map<string, Seat>();
 
-  // Build set of all desk tiles
-  const deskTiles = new Set<string>();
+  // Build maps of workstation tiles with priority:
+  // 2 = actual desk (DESK_*), 1 = computer (PC_*, LAPTOP_*)
+  const deskTiles = new Map<string, number>();
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type);
-    if (!entry || !entry.isDesk) continue;
+    if (!entry) continue;
+    const baseType = item.type.split(':')[0];
+    let priority = 0;
+    if (baseType.startsWith('DESK')) priority = 2;
+    else if (baseType.startsWith('PC') || baseType.startsWith('LAPTOP')) priority = 1;
+    if (priority === 0) continue;
     for (let dr = 0; dr < entry.footprintH; dr++) {
       for (let dc = 0; dc < entry.footprintW; dc++) {
-        deskTiles.add(`${item.col + dc},${item.row + dr}`);
+        const key = `${item.col + dc},${item.row + dr}`;
+        deskTiles.set(key, Math.max(deskTiles.get(key) ?? 0, priority));
       }
     }
   }
@@ -188,8 +195,9 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
     const entry = getCatalogEntry(item.type);
     if (!entry || entry.category !== 'chairs') continue;
 
+    const bgRows = entry.backgroundTiles ?? 0;
     let seatCount = 0;
-    for (let dr = 0; dr < entry.footprintH; dr++) {
+    for (let dr = bgRows; dr < entry.footprintH; dr++) {
       for (let dc = 0; dc < entry.footprintW; dc++) {
         const tileCol = item.col + dc;
         const tileRow = item.row + dr;
@@ -199,13 +207,19 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
         // 2) Adjacent desk direction
         // 3) Default forward (DOWN)
         let facingDir: Direction = Direction.DOWN;
+        let deskPriority = 0;
         if (entry.orientation) {
           facingDir = orientationToFacing(entry.orientation);
+          const fd = dirs.find((d) => d.facing === facingDir);
+          if (fd) {
+            deskPriority = deskTiles.get(`${tileCol + fd.dc},${tileRow + fd.dr}`) ?? 0;
+          }
         } else {
           for (const d of dirs) {
-            if (deskTiles.has(`${tileCol + d.dc},${tileRow + d.dr}`)) {
+            const p = deskTiles.get(`${tileCol + d.dc},${tileRow + d.dr}`) ?? 0;
+            if (p > deskPriority) {
               facingDir = d.facing;
-              break;
+              deskPriority = p;
             }
           }
         }
@@ -218,6 +232,8 @@ export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
           seatRow: tileRow,
           facingDir,
           assigned: false,
+          facesDesk: deskPriority > 0,
+          deskPriority,
         });
         seatCount++;
       }

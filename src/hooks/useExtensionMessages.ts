@@ -72,6 +72,7 @@ export function useExtensionMessages(
   getOfficeState: () => OfficeState,
   onLayoutLoaded?: (layout: OfficeLayout) => void,
   isEditDirty?: () => boolean,
+  onEvent?: (text: string) => void,
 ): ExtensionMessageState {
   const [agents, setAgents] = useState<number[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<number | null>(null);
@@ -140,8 +141,10 @@ export function useExtensionMessages(
         setSelectedAgent(id);
         os.addAgent(id, undefined, undefined, undefined, undefined, folderName);
         saveAgentSeats(os);
+        onEvent?.(folderName ? `Agent joined: ${folderName}` : `Agent #${id} joined`);
       } else if (msg.type === 'agentClosed') {
         const id = msg.id as number;
+        onEvent?.(`Agent #${id} left`);
         setAgents((prev) => prev.filter((a) => a !== id));
         setSelectedAgent((prev) => (prev === id ? null : prev));
         setAgentTools((prev) => {
@@ -207,6 +210,7 @@ export function useExtensionMessages(
         os.setAgentTool(id, toolName);
         os.setAgentActive(id, true);
         os.clearPermissionBubble(id);
+        onEvent?.(`#${id} using ${toolName}`);
         // Create sub-agent character for Task tool subtasks
         if (status.startsWith('Subtask:')) {
           const label = status.slice('Subtask:'.length).trim();
@@ -259,13 +263,15 @@ export function useExtensionMessages(
             delete next[id];
             return next;
           }
+          // Only play sound/event on transition from active → waiting (not repeated waiting)
+          if (status === 'waiting' && prev[id] !== 'waiting') {
+            os.showWaitingBubble(id);
+            playDoneSound();
+            onEvent?.(`Agent #${id} finished`);
+          }
           return { ...prev, [id]: status };
         });
         os.setAgentActive(id, status === 'active');
-        if (status === 'waiting') {
-          os.showWaitingBubble(id);
-          playDoneSound();
-        }
       } else if (msg.type === 'agentToolPermission') {
         const id = msg.id as number;
         setAgentTools((prev) => {
@@ -277,6 +283,7 @@ export function useExtensionMessages(
           };
         });
         os.showPermissionBubble(id);
+        onEvent?.(`Agent #${id} needs permission`);
       } else if (msg.type === 'subagentToolPermission') {
         const id = msg.id as number;
         const parentToolId = msg.parentToolId as string;

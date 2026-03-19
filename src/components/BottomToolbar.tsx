@@ -11,6 +11,7 @@ interface BottomToolbarProps {
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
   workspaceFolders: WorkspaceFolder[];
+  onOpenAgentGrid?: () => void;
 }
 
 const panelStyle: React.CSSProperties = {
@@ -51,6 +52,7 @@ export function BottomToolbar({
   isDebugMode,
   onToggleDebugMode,
   workspaceFolders,
+  onOpenAgentGrid,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -162,6 +164,20 @@ export function BottomToolbar({
       >
         Layout
       </button>
+      {onOpenAgentGrid && (
+        <button
+          onClick={onOpenAgentGrid}
+          onMouseEnter={() => setHovered('roster')}
+          onMouseLeave={() => setHovered(null)}
+          style={{
+            ...btnBase,
+            background: hovered === 'roster' ? 'var(--pixel-btn-hover-bg)' : btnBase.background,
+          }}
+          title="View all agents"
+        >
+          Roster
+        </button>
+      )}
       <div style={{ position: 'relative' }}>
         <button
           onClick={() => setIsSettingsOpen((v) => !v)}

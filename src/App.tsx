@@ -1,7 +1,9 @@
 import { useCallback, useRef, useState } from 'react';
 
+import { AgentGrid } from './components/AgentGrid.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { DebugView } from './components/DebugView.js';
+import { EventFeed, useEventFeed } from './components/EventFeed.js';
 import { ZoomControls } from './components/ZoomControls.js';
 import { PULSE_ANIMATION_DURATION_SEC } from './constants.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
@@ -9,6 +11,7 @@ import { useEditorKeyboard } from './hooks/useEditorKeyboard.js';
 import { useExtensionMessages } from './hooks/useExtensionMessages.js';
 import { OfficeCanvas } from './office/components/OfficeCanvas.js';
 import { ToolOverlay } from './office/components/ToolOverlay.js';
+import { WallMonitor } from './office/components/WallMonitor.js';
 import { EditorState } from './office/editor/editorState.js';
 import { EditorToolbar } from './office/editor/EditorToolbar.js';
 import { OfficeState } from './office/engine/officeState.js';
@@ -121,6 +124,7 @@ function EditActionBar({
 
 function App() {
   const editor = useEditorActions(getOfficeState, editorState);
+  const { events, pushEvent } = useEventFeed();
 
   const isEditDirty = useCallback(
     () => editor.isEditMode && editor.isDirty,
@@ -138,13 +142,14 @@ function App() {
     layoutWasReset,
     loadedAssets,
     workspaceFolders,
-  } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty);
+  } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty, pushEvent);
 
   // Show migration notice once layout reset is detected
   const [migrationNoticeDismissed, setMigrationNoticeDismissed] = useState(false);
   const showMigrationNotice = layoutWasReset && !migrationNoticeDismissed;
 
   const [isDebugMode, setIsDebugMode] = useState(false);
+  const [isAgentGridOpen, setIsAgentGridOpen] = useState(false);
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
 
@@ -253,6 +258,23 @@ function App() {
 
       {!isDebugMode && <ZoomControls zoom={editor.zoom} onZoomChange={editor.handleZoomChange} />}
 
+      {!isDebugMode && <EventFeed events={events} />}
+
+      {!isDebugMode && !editor.isEditMode && (
+        <WallMonitor
+          officeState={officeState}
+          agents={agents}
+          agentTools={agentTools}
+          containerRef={containerRef}
+          zoom={editor.zoom}
+          panRef={editor.panRef}
+          tileCol={11}
+          tileRow={5}
+          widthTiles={10}
+          heightTiles={4}
+        />
+      )}
+
       {/* Vignette overlay */}
       <div
         style={{
@@ -271,6 +293,14 @@ function App() {
         isDebugMode={isDebugMode}
         onToggleDebugMode={handleToggleDebugMode}
         workspaceFolders={workspaceFolders}
+        onOpenAgentGrid={() => setIsAgentGridOpen(true)}
+      />
+
+      <AgentGrid
+        officeState={officeState}
+        agentTools={agentTools}
+        isOpen={isAgentGridOpen}
+        onClose={() => setIsAgentGridOpen(false)}
       />
 
       {editor.isEditMode && editor.isDirty && (

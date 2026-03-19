@@ -31,18 +31,28 @@ const TOOL_NAME_MAP: Record<string, string> = {
   mcp: 'MCP',
   sessions_spawn: 'Task',
   sessions_send: 'Task',
+  kimi_delegate: 'Task',
+  kimi_research: 'Task',
   image: 'WebFetch',
   memory_search: 'Grep',
   memory_get: 'Read',
   web_search_brave: 'WebSearch',
   cron: 'Bash',
   session_status: 'Read',
+  process: 'Bash',
 };
 
 /** Map an OpenClaw tool name to the pixel-agents display name */
 export function mapToolName(openclawTool: string): string {
   const lower = openclawTool.toLowerCase();
-  return TOOL_NAME_MAP[lower] ?? openclawTool;
+  if (TOOL_NAME_MAP[lower]) return TOOL_NAME_MAP[lower];
+  // Handle MCP-prefixed tool names (e.g. mcp__kimi__kimi_delegate → kimi_delegate)
+  if (lower.startsWith('mcp__')) {
+    const parts = lower.split('__');
+    const baseName = parts[parts.length - 1];
+    if (TOOL_NAME_MAP[baseName]) return TOOL_NAME_MAP[baseName];
+  }
+  return openclawTool;
 }
 
 // ── Session → Agent ID mapping ──────────────────────────────────────────
@@ -64,16 +74,24 @@ function getOrCreateAgentId(sessionKey: string): number {
 
 // ── Subagent tracking ────────────────────────────────────────────────────
 
-/** Maps subagent unique key (tool_use id) → agent ID */
+/** Maps tool_use id → agent ID for active subagent tasks */
 const subagentIds = new Map<string, number>();
 /** Maps tool_use id → display label for subagents */
 const subagentLabels = new Map<string, string>();
 /** Tracks pending Agent tool_use IDs that haven't completed yet */
 const pendingAgentToolUseIds = new Set<string>();
+/** Pool of idle subagent character IDs per parent agent, available for reuse */
+const idleSubagentPool = new Map<number, number[]>();
+/** Maps subagent character ID → parent agent ID (for recycling) */
+const subagentParent = new Map<number, number>();
 /** Tracks the last tool activity time per agent ID */
 const agentLastActivity = new Map<number, number>();
+/** Tracks the last dispatched status per agent to avoid duplicate dispatches */
+const agentLastStatus = new Map<number, string>();
 /** The main (first) session's agent ID, set once sessions come in */
 let mainAgentId: number | null = null;
+/** Tracks the last seen updatedAt per session key, to detect genuine activity changes */
+const sessionLastUpdatedAt = new Map<string, number>();
 
 const IDLE_TIMEOUT_MS = 10_000;
 
@@ -92,22 +110,37 @@ const TOOL_ACTIVITY: Record<string, ActivityCategory> = {
   exec: 'running',
   bash: 'running',
   cron: 'running',
+  process: 'running',
   web_search: 'searching',
   web_fetch: 'searching',
   web_search_brave: 'searching',
   sessions_spawn: 'spawning',
   agent: 'spawning',
   task: 'spawning',
+  kimi_delegate: 'spawning',
+  kimi_research: 'searching',
 };
 
+/** Normalize MCP-prefixed tool names to their base name (e.g. mcp__kimi__kimi_delegate → kimi_delegate) */
+function normalizeToolName(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.startsWith('mcp__')) {
+    const parts = lower.split('__');
+    return parts[parts.length - 1];
+  }
+  return lower;
+}
+
 function getActivityForTool(toolName: string): ActivityCategory {
-  return TOOL_ACTIVITY[toolName.toLowerCase()] ?? 'running';
+  const normalized = normalizeToolName(toolName);
+  return TOOL_ACTIVITY[normalized] ?? TOOL_ACTIVITY[toolName.toLowerCase()] ?? 'running';
 }
 
 /** Format a tool call into a human-readable status string */
 function formatToolStatus(toolName: string, input: Record<string, unknown>): string {
   const basename = (p: unknown) => (typeof p === 'string' ? p.split(/[/\\]/).pop() ?? p : '');
-  switch (toolName.toLowerCase()) {
+  const normalized = normalizeToolName(toolName);
+  switch (normalized) {
     case 'read':
       return `Reading ${basename(input.file_path ?? input.path)}`;
     case 'write':
@@ -126,6 +159,10 @@ function formatToolStatus(toolName: string, input: Record<string, unknown>): str
       return `Fetching: ${basename(input.url)}`;
     case 'sessions_spawn':
       return `Spawning: ${(input.task as string)?.slice(0, 30) ?? 'subagent'}`;
+    case 'kimi_delegate':
+      return `Delegating: ${(input.description as string)?.slice(0, 30) ?? (input.task as string)?.slice(0, 30) ?? 'Kimi task'}`;
+    case 'kimi_research':
+      return `Researching: ${(input.query as string)?.slice(0, 30) ?? (input.topic as string)?.slice(0, 30) ?? 'Kimi research'}`;
     case 'memory_search':
       return `Searching memory`;
     case 'image':
@@ -140,21 +177,71 @@ function formatToolStatus(toolName: string, input: Record<string, unknown>): str
 // ── History-based tool detection ─────────────────────────────────────────
 
 /** Tool names that indicate subagent spawning (case-insensitive match) */
-const SUBAGENT_TOOL_NAMES = new Set(['agent', 'task', 'sessions_spawn']);
+const SUBAGENT_TOOL_NAMES = new Set([
+  'agent', 'task', 'sessions_spawn', 'sessions_send',
+  'kimi_delegate',
+]);
+
+/** Patterns in tool names that indicate delegation/subagent work */
+const SUBAGENT_TOOL_PATTERNS = ['_delegate'];
 
 function isSubagentTool(name: string): boolean {
-  return SUBAGENT_TOOL_NAMES.has(name.toLowerCase());
+  const lower = name.toLowerCase();
+  if (SUBAGENT_TOOL_NAMES.has(lower)) return true;
+  // Check normalized name (strips mcp__ prefix)
+  const normalized = normalizeToolName(name);
+  if (SUBAGENT_TOOL_NAMES.has(normalized)) return true;
+  // Also match delegation patterns in the full name
+  for (const pattern of SUBAGENT_TOOL_PATTERNS) {
+    if (lower.includes(pattern)) return true;
+  }
+  return false;
 }
 
 /** Set of tool_use IDs we've already processed, to avoid duplicates */
 const seenToolUseIds = new Set<string>();
+
+/** Extract tool call info from a content block, handling both Claude and OpenClaw formats.
+ *  Claude format:  { type: "tool_use", id, name, input }
+ *  OpenClaw format: { type: "toolCall", id, name, arguments }
+ */
+function extractToolCall(block: Record<string, unknown>): {
+  toolUseId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+} | null {
+  if (block.type === 'tool_use' || block.type === 'toolCall') {
+    const toolUseId = block.id as string | undefined;
+    if (!toolUseId) return null;
+    const toolName = block.name as string;
+    // "input" (Claude) or "arguments" (OpenClaw)
+    const input = ((block.input ?? block.arguments) as Record<string, unknown>) ?? {};
+    return { toolUseId, toolName, input };
+  }
+  return null;
+}
+
+/** Extract tool result ID from a content block or message, handling both formats.
+ *  Claude format:  { type: "tool_result", tool_use_id }
+ *  OpenClaw format: message with { role: "toolResult", toolCallId }
+ */
+function extractToolResultId(block: Record<string, unknown>): string | null {
+  if (block.type === 'tool_result') {
+    return (block.tool_use_id as string) ?? null;
+  }
+  // OpenClaw native format: { type: "toolResult", toolCallId }
+  if (block.type === 'toolResult') {
+    return (block.toolCallId as string) ?? (block.tool_use_id as string) ?? null;
+  }
+  return null;
+}
 
 /**
  * Poll session history and process new tool_use blocks for a given session.
  */
 async function pollHistoryForSession(sessionKey: string, agentId: number | null): Promise<void> {
   try {
-    const messages = await getSessionHistory(sessionKey, 20, true);
+    const messages = await getSessionHistory(sessionKey, 40, true);
     const ownerAgentId = agentId ?? mainAgentId;
 
     for (const msg of messages) {
@@ -164,16 +251,18 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
 
       for (const block of content) {
         const b = block as Record<string, unknown>;
-        if (b.type !== 'tool_use') continue;
+        const toolCall = extractToolCall(b);
+        if (!toolCall) continue;
 
-        const toolUseId = b.id as string | undefined;
-        if (!toolUseId || seenToolUseIds.has(toolUseId)) continue;
+        const { toolUseId, toolName, input } = toolCall;
+        if (seenToolUseIds.has(toolUseId)) continue;
         seenToolUseIds.add(toolUseId);
 
-        const toolName = b.name as string;
-        const input = (b.input as Record<string, unknown>) ?? {};
-
-        // Detect subagent spawning
+        // Detect subagent spawning from tool_use blocks.
+        // Session-based detection (`:subagent:` keys in session list) is the primary
+        // path. History detection is a fallback for cases where tool_use appears
+        // before the session is visible, and also tracks the tool_use → tool_result
+        // lifecycle for activity status.
         if (isSubagentTool(toolName)) {
           const label =
             (input.description as string) ??
@@ -182,21 +271,55 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
             'subagent';
 
           if (!subagentIds.has(toolUseId)) {
-            const id = getOrCreateAgentId(`subagent:${toolUseId}`);
-            subagentIds.set(toolUseId, id);
-            subagentLabels.set(toolUseId, label);
-            pendingAgentToolUseIds.add(toolUseId);
-            dispatchToWebview({ type: 'agentCreated', id, folderName: label });
-            dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
-            // Show the task as a tool overlay label above the character
-            dispatchToWebview({
-              type: 'agentToolStart',
-              id,
-              toolId: toolUseId,
-              status: `Subtask: ${label}`,
-            });
-            agentLastActivity.set(id, Date.now());
-            console.log(`[Adapter] Subagent spawned: "${label}" (${toolUseId}) → agent ${id}`);
+            // Check if a session-based subagent already exists for this parent.
+            // If so, just track the tool_use ID for completion detection — don't create
+            // a duplicate character.
+            const parentId = ownerAgentId ?? mainAgentId ?? 0;
+            const parentSession = agentToSession.get(parentId);
+            let sessionSubagentId: number | undefined;
+            if (parentSession) {
+              // Collect IDs already linked to a tool_use to avoid double-linking
+              const alreadyLinked = new Set<number>();
+              for (const linkedId of subagentIds.values()) {
+                alreadyLinked.add(linkedId);
+              }
+              // Look for any :subagent: session under this parent that hasn't been linked yet
+              for (const [key, id] of sessionToAgent) {
+                if (key.startsWith(parentSession.replace(':main', '')) && key.includes(':subagent:')) {
+                  if (!alreadyLinked.has(id) && agentLastActivity.has(id)) {
+                    sessionSubagentId = id;
+                    break;
+                  }
+                }
+              }
+            }
+
+            if (sessionSubagentId !== undefined) {
+              // Session already created the character — just track the tool lifecycle
+              subagentIds.set(toolUseId, sessionSubagentId);
+              subagentLabels.set(toolUseId, label);
+              pendingAgentToolUseIds.add(toolUseId);
+              agentLastActivity.set(sessionSubagentId, Date.now());
+              console.log(`[Adapter] Subagent tool linked to session character: "${label}" (${toolUseId}) → agent ${sessionSubagentId}`);
+            } else {
+              // No session found — create subagent character via the parent's agentToolStart
+              // with "Subtask:" prefix. This triggers useExtensionMessages → os.addSubagent()
+              // which creates the character as a proper subagent (near parent, with parent palette).
+              subagentIds.set(toolUseId, parentId);
+              subagentLabels.set(toolUseId, label);
+              pendingAgentToolUseIds.add(toolUseId);
+
+              agentLastStatus.set(parentId, 'active');
+              dispatchToWebview({ type: 'agentStatus', id: parentId, status: 'active' });
+              dispatchToWebview({
+                type: 'agentToolStart',
+                id: parentId,
+                toolId: toolUseId,
+                status: `Subtask: ${label}`,
+              });
+              agentLastActivity.set(parentId, Date.now());
+              console.log(`[Adapter] Subagent spawned (history→Subtask): "${label}" (${toolUseId}) on parent ${parentId}`);
+            }
           }
         }
 
@@ -204,6 +327,7 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
         if (ownerAgentId !== null && !isSubagentTool(toolName)) {
           const activity = getActivityForTool(toolName);
           const mappedName = mapToolName(toolName);
+          agentLastStatus.set(ownerAgentId, 'active');
           dispatchToWebview({ type: 'agentStatus', id: ownerAgentId, status: 'active' });
           dispatchToWebview({ type: 'agentToolUse', id: ownerAgentId, tool: mappedName, activity });
           // Show tool name as overlay label above character
@@ -218,37 +342,35 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
         }
       }
 
-      // Check for tool_result blocks to detect subagent completion
+      // Check for tool_result blocks in assistant content to detect subagent completion
       for (const block of content) {
         const b = block as Record<string, unknown>;
-        if (b.type !== 'tool_result') continue;
-        const toolUseId = b.tool_use_id as string | undefined;
-        if (toolUseId && pendingAgentToolUseIds.has(toolUseId)) {
-          pendingAgentToolUseIds.delete(toolUseId);
-          const id = subagentIds.get(toolUseId);
-          if (id !== undefined) {
-            dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
-            scheduleSubagentClose(toolUseId, id);
-          }
+        const resultId = extractToolResultId(b);
+        if (resultId && pendingAgentToolUseIds.has(resultId)) {
+          completeSubagentTool(resultId);
         }
       }
     }
 
-    // Also check tool role messages for tool_result blocks
+    // Check toolResult role messages (OpenClaw native format: role="toolResult", toolCallId)
+    // and tool role messages (Claude format: role="tool")
     for (const msg of messages) {
-      if (msg.role !== 'tool') continue;
-      const content = msg.content;
-      if (!Array.isArray(content)) continue;
-
-      for (const block of content) {
-        const b = block as Record<string, unknown>;
-        const toolUseId = (b.tool_use_id as string) ?? (b.id as string);
-        if (toolUseId && pendingAgentToolUseIds.has(toolUseId)) {
-          pendingAgentToolUseIds.delete(toolUseId);
-          const id = subagentIds.get(toolUseId);
-          if (id !== undefined) {
-            dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
-            scheduleSubagentClose(toolUseId, id);
+      const m = msg as unknown as Record<string, unknown>;
+      if (msg.role === 'toolResult') {
+        // OpenClaw native format
+        const toolCallId = m.toolCallId as string | undefined;
+        if (toolCallId && pendingAgentToolUseIds.has(toolCallId)) {
+          completeSubagentTool(toolCallId);
+        }
+      } else if (msg.role === 'tool') {
+        // Claude format
+        const content = msg.content;
+        if (!Array.isArray(content)) continue;
+        for (const block of content) {
+          const b = block as Record<string, unknown>;
+          const toolUseId = (b.tool_use_id as string) ?? (b.id as string);
+          if (toolUseId && pendingAgentToolUseIds.has(toolUseId)) {
+            completeSubagentTool(toolUseId);
           }
         }
       }
@@ -259,17 +381,68 @@ async function pollHistoryForSession(sessionKey: string, agentId: number | null)
 }
 
 
-function scheduleSubagentClose(toolUseId: string, id: number): void {
+/** Handle subagent tool completion — clean up character and tracking state */
+function completeSubagentTool(toolUseId: string): void {
+  pendingAgentToolUseIds.delete(toolUseId);
+  const parentId = subagentIds.get(toolUseId);
+  if (parentId === undefined) return;
+
   const label = subagentLabels.get(toolUseId) ?? toolUseId;
-  setTimeout(() => {
-    dispatchToWebview({ type: 'agentClosed', id });
+
+  // Check if this was a session-based subagent (has its own agent ID) or
+  // a history-based subagent (tracked via parent's Subtask: tool)
+  const isSessionBased = subagentParent.has(parentId);
+
+  if (isSessionBased) {
+    // Session-based: parentId is actually the subagent's own ID
+    agentLastStatus.set(parentId, 'waiting');
+    dispatchToWebview({ type: 'agentStatus', id: parentId, status: 'waiting' });
+    recycleSubagent(toolUseId, parentId);
+  } else {
+    // History-based: parentId is the actual parent agent — dispatch subagentClear
+    // to remove the subagent character created via "Subtask:" agentToolStart
+    dispatchToWebview({
+      type: 'agentToolDone',
+      id: parentId,
+      toolId: toolUseId,
+    });
+    dispatchToWebview({
+      type: 'subagentClear',
+      id: parentId,
+      parentToolId: toolUseId,
+    });
     subagentIds.delete(toolUseId);
     subagentLabels.delete(toolUseId);
-    sessionToAgent.delete(`subagent:${toolUseId}`);
-    agentToSession.delete(id);
-    agentLastActivity.delete(id);
-    console.log(`[Adapter] Subagent closed: "${label}" (${toolUseId}) → agent ${id}`);
-  }, 5000);
+    console.log(`[Adapter] Subagent completed (history): "${label}" (${toolUseId}) on parent ${parentId}`);
+  }
+}
+
+function recycleSubagent(toolUseId: string, id: number): void {
+  const label = subagentLabels.get(toolUseId) ?? toolUseId;
+  const parentId = subagentParent.get(id) ?? mainAgentId ?? 0;
+
+  // Clean up the tool_use mapping
+  subagentIds.delete(toolUseId);
+  subagentLabels.delete(toolUseId);
+  pendingAgentToolUseIds.delete(toolUseId);
+
+  // Session-based subagents (with their own :subagent: session) are managed by
+  // the session lifecycle — don't pool them. Only pool history-created subagents.
+  const sessionKey = agentToSession.get(id);
+  if (sessionKey && sessionKey.includes(':subagent:')) {
+    console.log(`[Adapter] Subagent idle (session-managed): "${label}" (${toolUseId}) → agent ${id}`);
+    return;
+  }
+
+  // Add to idle pool for this parent (history-created subagents only)
+  const pool = idleSubagentPool.get(parentId);
+  if (pool) {
+    pool.push(id);
+  } else {
+    idleSubagentPool.set(parentId, [id]);
+  }
+
+  console.log(`[Adapter] Subagent idle (pooled): "${label}" (${toolUseId}) → agent ${id}`);
 }
 
 // ── Idle detection timer ─────────────────────────────────────────────────
@@ -280,7 +453,8 @@ function startIdleDetection(): void {
   idleTimer = setInterval(() => {
     const now = Date.now();
     for (const [id, lastActive] of agentLastActivity) {
-      if (now - lastActive > IDLE_TIMEOUT_MS) {
+      if (now - lastActive > IDLE_TIMEOUT_MS && agentLastStatus.get(id) !== 'waiting') {
+        agentLastStatus.set(id, 'waiting');
         dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
       }
     }
@@ -380,10 +554,23 @@ async function loadInitialState(): Promise<void> {
 
     for (const session of sessions) {
       const id = getOrCreateAgentId(session.key);
-      agentIds.push(id);
       knownSessions.set(session.key, session);
+      agentIds.push(id);
       if (savedSeats[id]) {
-        agentMeta[id] = savedSeats[id];
+        // Keep palette/hueShift but omit seatId — let findFreeSeat assign desk seats
+        agentMeta[id] = {
+          palette: savedSeats[id].palette,
+          hueShift: savedSeats[id].hueShift,
+        };
+      }
+      // Track parent for subagent sessions
+      if (session.key.includes(':subagent:')) {
+        const parts = session.key.split(':subagent:');
+        const parentKey = parts[0] + ':main';
+        const parentId = sessionToAgent.get(parentKey);
+        if (parentId !== undefined) {
+          subagentParent.set(id, parentId);
+        }
       }
     }
 
@@ -405,21 +592,25 @@ async function loadInitialState(): Promise<void> {
 
     // Load persisted layout, falling back to default layout
     let layout = null;
+    let defaultLayout = null;
     try {
       const raw = localStorage.getItem('openclaw-pixel-agents-layout');
       if (raw) layout = JSON.parse(raw);
     } catch { /* ignore */ }
 
-    // If no saved layout, fetch the default one with furniture
-    if (!layout) {
-      try {
-        const res = await fetch('./assets/default-layout-1.json');
-        if (res.ok) {
-          layout = await res.json();
-          localStorage.setItem('openclaw-pixel-agents-layout', JSON.stringify(layout));
-          console.log('[Adapter] Loaded default layout with furniture');
-        }
-      } catch { /* ignore */ }
+    // Always fetch the default layout to check for revision updates
+    try {
+      const res = await fetch('./assets/default-layout-1.json');
+      if (res.ok) defaultLayout = await res.json();
+    } catch { /* ignore */ }
+
+    // Use default if no saved layout, or if default has a newer revision
+    if (!layout || (defaultLayout && (defaultLayout.layoutRevision ?? 0) > (layout.layoutRevision ?? 0))) {
+      if (defaultLayout) {
+        layout = defaultLayout;
+        localStorage.setItem('openclaw-pixel-agents-layout', JSON.stringify(layout));
+        console.log('[Adapter] Loaded default layout (revision ' + (layout.layoutRevision ?? 0) + ')');
+      }
     }
 
     dispatchToWebview({
@@ -467,16 +658,19 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
       dispatchToWebview({ type: 'agentCreated', id, folderName });
 
       if (isSubagent) {
-        // Derive parent key: 'agent:main:subagent:UUID' → 'agent:main:main'
         const parts = session.key.split(':subagent:');
         const parentKey = parts[0] + ':main';
         const parentId = sessionToAgent.get(parentKey);
+        // Track parent relationship for cleanup
+        if (parentId !== undefined) {
+          subagentParent.set(id, parentId);
+        }
+        agentLastStatus.set(id, 'active');
+        dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
+        agentLastActivity.set(id, Date.now());
         console.log(
           `[Adapter] Subagent session detected: ${session.key} → agent ${id} (parent: ${parentKey} → ${parentId ?? 'unknown'})`,
         );
-        // Mark subagent active immediately
-        dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
-        agentLastActivity.set(id, Date.now());
       } else {
         console.log(`[Adapter] New session detected: ${session.key} → agent ${id}`);
       }
@@ -490,12 +684,12 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
     mainAgentId = sessionToAgent.get(mainSession.key) ?? null;
   }
 
-  // Poll history for recently active sessions to detect tool usage
+  // Poll history for all recently active sessions to detect tool usage
   const now2 = Date.now();
   for (const session of sessions) {
     const updatedAt = session.updatedAt ?? 0;
-    // Only poll history for sessions updated in the last 30 seconds
-    if (now2 - updatedAt > 30_000) continue;
+    // Poll sessions updated in the last 60 seconds
+    if (now2 - updatedAt > 60_000) continue;
 
     const agentId = sessionToAgent.get(session.key) ?? null;
     // Fire and forget — don't block the update loop
@@ -507,18 +701,36 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
     if (!currentKeys.has(key)) {
       const id = sessionToAgent.get(key);
       if (id !== undefined) {
+        // Close any pooled idle subagents for this parent (non-subagent sessions only)
+        if (!key.includes(':subagent:')) {
+          const pool = idleSubagentPool.get(id);
+          if (pool) {
+            for (const subId of pool) {
+              dispatchToWebview({ type: 'agentClosed', id: subId });
+              agentLastActivity.delete(subId);
+              agentLastStatus.delete(subId);
+              subagentParent.delete(subId);
+            }
+            idleSubagentPool.delete(id);
+          }
+        }
         dispatchToWebview({ type: 'agentClosed', id });
         sessionToAgent.delete(key);
         agentToSession.delete(id);
         agentLastActivity.delete(id);
+        agentLastStatus.delete(id);
+        subagentParent.delete(id);
         console.log(`[Adapter] Session removed: ${key} → agent ${id}`);
       }
       knownSessions.delete(key);
+      sessionLastUpdatedAt.delete(key);
     }
   }
 
   // Update activity states based on updatedAt changes
-  // Only use updatedAt as fallback — history polling provides more granular status
+  // Only use updatedAt as fallback — history polling provides more granular status.
+  // Only transition to 'active' when updatedAt actually changes (genuine new activity),
+  // not just because the timestamp is recent — prevents flip-flop with idle timer.
   const now = Date.now();
   for (const session of sessions) {
     const id = sessionToAgent.get(session.key);
@@ -529,12 +741,22 @@ function handleSessionUpdate(sessions: OpenClawSession[]): void {
     if (lastTranscriptActivity && now - lastTranscriptActivity < IDLE_TIMEOUT_MS) continue;
 
     const updatedAt = session.updatedAt ?? 0;
+    const prevUpdatedAt = sessionLastUpdatedAt.get(session.key) ?? 0;
+    sessionLastUpdatedAt.set(session.key, updatedAt);
+
     const ageMs = now - updatedAt;
 
-    if (ageMs < 10000) {
-      dispatchToWebview({ type: 'agentStatus', id, status: 'active' });
-    } else {
-      dispatchToWebview({ type: 'agentStatus', id, status: 'waiting' });
+    // Use a longer idle threshold for subagent sessions — they may have gaps
+    // between tool calls while the LLM is thinking
+    const isSubagent = session.key.includes(':subagent:');
+    const idleThreshold = isSubagent ? 30_000 : 10_000;
+
+    // Only mark active if updatedAt genuinely changed since last poll
+    const hasNewActivity = updatedAt > prevUpdatedAt;
+    const newStatus = (hasNewActivity && ageMs < idleThreshold) ? 'active' : 'waiting';
+    if (agentLastStatus.get(id) !== newStatus) {
+      agentLastStatus.set(id, newStatus);
+      dispatchToWebview({ type: 'agentStatus', id, status: newStatus });
     }
   }
 }
