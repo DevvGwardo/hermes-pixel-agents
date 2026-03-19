@@ -243,13 +243,21 @@ export class OfficeState {
       palette = preferredPalette;
       hueShift = preferredHueShift ?? 0;
     } else if (model) {
-      // Use model to determine visual swarm distinction
+      // Use model to determine visual swarm distinction.
+      // Model strings come in formats like 'kimi-coding/k2p5', 'kimi/k2.5',
+      // 'minimax/MiniMax-M2.7', 'minimax/m2.7' — use flexible regex matching.
       const modelLower = model.toLowerCase();
-      if (modelLower.includes('kimi')) {
+      // Kimi: matches 'kimi' anywhere (handles 'kimi-coding/k2p5', 'kimi/k2.5')
+      const isKimi = /^kimi\b|[/-]kimi\b/.test(modelLower);
+      // MiniMax: matches 'minimax' at start or after '/', or 'm2.7'/'m3.x' variant anywhere
+      const isMiniMax =
+        /^minimax\b|[/-]minimax\b/.test(modelLower) ||
+        /\bm[23](?:[.]\d+)*\b/.test(modelLower);
+      if (isKimi) {
         // Kimi swarm: palette 0-2 (blues/teals)
         palette = Math.floor(Math.random() * 3);
         hueShift = 0;
-      } else if (modelLower.includes('minimax') || modelLower.includes('m2.7')) {
+      } else if (isMiniMax) {
         // MiniMax swarm: palette 3-5 (warmer tones)
         palette = 3 + Math.floor(Math.random() * 3);
         hueShift = 0;
