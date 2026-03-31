@@ -8,6 +8,7 @@ interface SettingsModalProps {
   onClose: () => void;
   isDebugMode: boolean;
   onToggleDebugMode: () => void;
+  onOpenScreens: () => void;
 }
 
 const menuItemBase: React.CSSProperties = {
@@ -30,6 +31,7 @@ export function SettingsModal({
   onClose,
   isDebugMode,
   onToggleDebugMode,
+  onOpenScreens,
 }: SettingsModalProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [soundLocal, setSoundLocal] = useState(isSoundEnabled);
@@ -139,6 +141,20 @@ export function SettingsModal({
           }}
         >
           Import Layout
+        </button>
+        <button
+          onClick={() => {
+            onOpenScreens();
+            onClose();
+          }}
+          onMouseEnter={() => setHovered('screens')}
+          onMouseLeave={() => setHovered(null)}
+          style={{
+            ...menuItemBase,
+            background: hovered === 'screens' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+          }}
+        >
+          Manage Screens
         </button>
         <button
           onClick={() => {

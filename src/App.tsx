@@ -5,7 +5,9 @@ import { AgentLabels } from './components/AgentLabels.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { DebugView } from './components/DebugView.js';
 import { EventFeed, useEventFeed } from './components/EventFeed.js';
+import { ScreensModal } from './components/ScreensModal.js';
 import { ZoomControls } from './components/ZoomControls.js';
+import { getEnabledScreens } from './screenSettings.js';
 import { PULSE_ANIMATION_DURATION_SEC } from './constants.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
 import { useEditorKeyboard } from './hooks/useEditorKeyboard.js';
@@ -152,6 +154,8 @@ function App() {
 
   const [isDebugMode, setIsDebugMode] = useState(false);
   const [isAgentGridOpen, setIsAgentGridOpen] = useState(false);
+  const [isScreensOpen, setIsScreensOpen] = useState(false);
+  const [screensTick, setScreensTick] = useState(0);
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
 
@@ -274,12 +278,9 @@ function App() {
       {!isDebugMode && <EventFeed events={events} />}
 
       {!isDebugMode && !editor.isEditMode && (() => {
-        const videos = [
-          { id: 'jclhVKSC0Tk', label: 'Night of the Living Dead' },
-          { id: 'FC6jFoYm3xs', label: 'Nosferatu' },
-          { id: 'X-S5v4UwhAE', label: 'Metropolis' },
-          { id: 'kmYcT5gT6a4', label: 'His Girl Friday' },
-        ];
+        void screensTick; // re-render when screens change
+        const videos = getEnabledScreens();
+        if (videos.length === 0) return null;
         const cols = officeState.getLayout().cols;
         const gap = 1;
         const totalGaps = (videos.length - 1) * gap;
@@ -299,7 +300,7 @@ function App() {
               tileRow={3}
               widthTiles={screenW}
               heightTiles={6}
-              youtubeVideoId={v.id}
+              youtubeVideoId={v.youtubeVideoId}
             />
           ))}
         </>);
@@ -324,6 +325,7 @@ function App() {
         onToggleDebugMode={handleToggleDebugMode}
         workspaceFolders={workspaceFolders}
         onOpenAgentGrid={() => setIsAgentGridOpen(true)}
+        onOpenScreens={() => setIsScreensOpen(true)}
       />
 
       <AgentGrid
@@ -331,6 +333,12 @@ function App() {
         agentTools={agentTools}
         isOpen={isAgentGridOpen}
         onClose={() => setIsAgentGridOpen(false)}
+      />
+
+      <ScreensModal
+        isOpen={isScreensOpen}
+        onClose={() => setIsScreensOpen(false)}
+        onScreensChanged={() => setScreensTick((n) => n + 1)}
       />
 
       {editor.isEditMode && editor.isDirty && (
