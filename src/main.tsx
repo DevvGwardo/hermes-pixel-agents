@@ -4,7 +4,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { loadAllAssets } from './api/assetLoader.js';
-import { startAdapter } from './api/openclawAdapter.js';
+import { startAdapter } from './api/hermesAdapter.js';
 import App from './App.js';
 
 // Start adapter first so it catches the webviewReady message from React

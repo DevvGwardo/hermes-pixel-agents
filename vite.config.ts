@@ -3,8 +3,8 @@ import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
-  const gatewayUrl = env.VITE_OPENCLAW_GATEWAY_URL || 'http://127.0.0.1:18789';
-  const gatewayToken = env.VITE_OPENCLAW_GATEWAY_TOKEN || '';
+  const apiUrl = env.VITE_HERMES_API_URL || 'http://127.0.0.1:8642';
+  const apiKey = env.VITE_HERMES_API_KEY || '';
 
   return {
     plugins: [react()],
@@ -15,11 +15,11 @@ export default defineConfig(({ mode }) => {
     base: './',
     server: {
       proxy: {
-        '/tools': {
-          target: gatewayUrl,
+        '/api': {
+          target: apiUrl,
           changeOrigin: true,
-          headers: gatewayToken
-            ? { Authorization: `Bearer ${gatewayToken}` }
+          headers: apiKey
+            ? { Authorization: `Bearer ${apiKey}` }
             : undefined,
         },
       },
