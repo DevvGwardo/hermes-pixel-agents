@@ -44,7 +44,7 @@ export interface HermesMessage {
 
 // ── API calls ────────────────────────────────────────────────────────────────
 
-async function apiFetch(path: string): Promise<any> {
+async function apiFetch(path: string): Promise<unknown> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
 

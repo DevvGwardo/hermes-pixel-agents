@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-export interface FeedEvent {
-  id: number;
-  text: string;
-  timestamp: number;
-}
+import type { FeedEvent } from './types/eventFeed';
 
 const MAX_EVENTS = 3;
 const EVENT_LIFETIME_MS = 8000;
