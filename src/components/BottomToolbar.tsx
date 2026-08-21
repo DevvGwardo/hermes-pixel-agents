@@ -12,7 +12,6 @@ interface BottomToolbarProps {
   onToggleDebugMode: () => void;
   workspaceFolders: WorkspaceFolder[];
   onOpenAgentGrid?: () => void;
-  onOpenScreens?: () => void;
 }
 
 const panelStyle: React.CSSProperties = {
@@ -54,7 +53,6 @@ export function BottomToolbar({
   onToggleDebugMode,
   workspaceFolders,
   onOpenAgentGrid,
-  onOpenScreens,
 }: BottomToolbarProps) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -203,7 +201,6 @@ export function BottomToolbar({
           onClose={() => setIsSettingsOpen(false)}
           isDebugMode={isDebugMode}
           onToggleDebugMode={onToggleDebugMode}
-          onOpenScreens={onOpenScreens ?? (() => {})}
         />
       </div>
     </div>

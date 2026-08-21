@@ -44,7 +44,7 @@ export interface HermesMessage {
 
 // ── API calls ────────────────────────────────────────────────────────────────
 
-async function apiFetch(path: string): Promise<any> {
+async function apiFetch(path: string): Promise<Record<string, unknown>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
 
@@ -53,7 +53,7 @@ async function apiFetch(path: string): Promise<any> {
     const text = await res.text().catch(() => '');
     throw new Error(`API ${path} failed (${res.status}): ${text}`);
   }
-  return res.json();
+  return (await res.json()) as Record<string, unknown>;
 }
 
 export async function listSessions(limit = 20): Promise<HermesSession[]> {
