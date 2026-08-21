@@ -4,17 +4,15 @@ import { AgentGrid } from './components/AgentGrid.js';
 import { AgentLabels } from './components/AgentLabels.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { DebugView } from './components/DebugView.js';
-import { EventFeed, useEventFeed } from './components/EventFeed.js';
-import { ScreensModal } from './components/ScreensModal.js';
+import { EventFeed } from './components/EventFeed.js';
 import { ZoomControls } from './components/ZoomControls.js';
-import { getEnabledScreens } from './screenSettings.js';
 import { PULSE_ANIMATION_DURATION_SEC } from './constants.js';
 import { useEditorActions } from './hooks/useEditorActions.js';
 import { useEditorKeyboard } from './hooks/useEditorKeyboard.js';
+import { useEventFeed } from './hooks/useEventFeed.js';
 import { useExtensionMessages } from './hooks/useExtensionMessages.js';
 import { OfficeCanvas } from './office/components/OfficeCanvas.js';
 import { ToolOverlay } from './office/components/ToolOverlay.js';
-import { WallMonitor } from './office/components/WallMonitor.js';
 import { EditorState } from './office/editor/editorState.js';
 import { EditorToolbar } from './office/editor/EditorToolbar.js';
 import { OfficeState } from './office/engine/officeState.js';
@@ -154,8 +152,6 @@ function App() {
 
   const [isDebugMode, setIsDebugMode] = useState(false);
   const [isAgentGridOpen, setIsAgentGridOpen] = useState(false);
-  const [isScreensOpen, setIsScreensOpen] = useState(false);
-  const [screensTick, setScreensTick] = useState(0);
 
   const handleToggleDebugMode = useCallback(() => setIsDebugMode((prev) => !prev), []);
 
@@ -277,35 +273,6 @@ function App() {
 
       {!isDebugMode && <EventFeed events={events} />}
 
-      {!isDebugMode && !editor.isEditMode && (() => {
-        void screensTick; // re-render when screens change
-        const videos = getEnabledScreens();
-        if (videos.length === 0) return null;
-        const cols = officeState.getLayout().cols;
-        const gap = 1;
-        const totalGaps = (videos.length - 1) * gap;
-        const usableCols = cols - 2 - totalGaps; // -2 for wall margins
-        const screenW = Math.floor(usableCols / videos.length);
-        return (<>
-          {videos.map((v, i) => (
-            <WallMonitor
-              key={v.id}
-              officeState={officeState}
-              agents={agents}
-              agentTools={agentTools}
-              containerRef={containerRef}
-              zoom={editor.zoom}
-              panRef={editor.panRef}
-              tileCol={1 + i * (screenW + gap)}
-              tileRow={3}
-              widthTiles={screenW}
-              heightTiles={6}
-              youtubeVideoId={v.youtubeVideoId}
-            />
-          ))}
-        </>);
-      })()}
-
       {/* Vignette overlay */}
       <div
         style={{
@@ -325,7 +292,6 @@ function App() {
         onToggleDebugMode={handleToggleDebugMode}
         workspaceFolders={workspaceFolders}
         onOpenAgentGrid={() => setIsAgentGridOpen(true)}
-        onOpenScreens={() => setIsScreensOpen(true)}
       />
 
       <AgentGrid
@@ -333,12 +299,6 @@ function App() {
         agentTools={agentTools}
         isOpen={isAgentGridOpen}
         onClose={() => setIsAgentGridOpen(false)}
-      />
-
-      <ScreensModal
-        isOpen={isScreensOpen}
-        onClose={() => setIsScreensOpen(false)}
-        onScreensChanged={() => setScreensTick((n) => n + 1)}
       />
 
       {editor.isEditMode && editor.isDirty && (
