@@ -1,12 +1,12 @@
 {
-  "name": "openclaw-pixel-agents",
+  "name": "hermes-pixel-agents",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Pixel art office visualization for OpenClaw AI agent sessions",
+  "description": "Pixel art office visualization for Hermes AI agent sessions",
   "repository": {
     "type": "git",
-    "url": "https://github.com/DevvGwardo/openclaw-pixel-agents"
+    "url": "https://github.com/DevvGwardo/hermes-pixel-agents"
   },
   "license": "MIT",
   "scripts": {
