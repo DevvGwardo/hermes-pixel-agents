@@ -1,14 +1,14 @@
-# 🦞 OpenClaw Pixel Agents
+# Hermes Pixel Agents
 
-A pixel art office where your OpenClaw AI agents come to life as animated characters. Each agent session becomes a character that walks around, sits at their desk, and visually reflects what they're doing.
+A pixel art office where your Hermes AI agents come to life as animated characters. Each agent session becomes a character that walks around, sits at their desk, and visually reflects what they're doing.
 
-Forked from [pablodelucca/pixel-agents](https://github.com/pablodelucca/pixel-agents) and converted from a VS Code extension to a standalone web app for [OpenClaw](https://github.com/openclaw/openclaw).
+Forked from [pablodelucca/pixel-agents](https://github.com/pablodelucca/pixel-agents) and adapted from a VS Code extension to a standalone web app for Hermes.
 
-![OpenClaw Pixel Agents](public/screenshot.png)
+![Hermes Pixel Agents](public/screenshot.png)
 
 ## Features
 
-- **One agent, one character** — every OpenClaw session gets its own animated character
+- **One agent, one character** — every Hermes session gets its own animated character
 - **Live activity tracking** — characters show what the agent is doing (reading, writing, searching, running commands)
 - **Sub-agent visualization** — spawned sub-agents appear as separate characters with their task description
 - **Office layout editor** — design your office with floors, walls, and furniture
@@ -17,12 +17,16 @@ Forked from [pablodelucca/pixel-agents](https://github.com/pablodelucca/pixel-ag
 - **Persistent layouts** — your office design is saved in localStorage
 - **Sound notifications** — optional chime when an agent finishes
 
+## Prerequisites
+
+- Hermes agent running with the API server enabled (`api_server.enabled: true` in config.yaml, default port 8642)
+
 ## Quick Start
 
 ```bash
-git clone https://github.com/DevvGwardo/openclaw-pixel-agents.git
-cd openclaw-pixel-agents
-cp .env.example .env    # configure gateway URL + token
+git clone https://github.com/DevvGwardo/hermes-pixel-agents.git
+cd hermes-pixel-agents
+cp .env.example .env    # edit if your API server runs on a different port
 npm install
 npm run dev
 ```
@@ -34,25 +38,24 @@ Then open http://localhost:5173/ in your browser.
 Create a `.env` file (or copy `.env.example`):
 
 ```env
-# OpenClaw Gateway URL (default port is 18789)
-VITE_OPENCLAW_GATEWAY_URL=http://localhost:18789
+# Hermes API server URL (default port is 8642)
+VITE_HERMES_API_URL=http://localhost:8642
 
-# Gateway auth token (from ~/.openclaw/openclaw.json → gateway.auth.token)
-VITE_OPENCLAW_GATEWAY_TOKEN=your_token_here
+# API key (optional — leave blank if no auth configured)
+VITE_HERMES_API_KEY=
 
 # Polling interval in milliseconds (default: 5000)
-VITE_OPENCLAW_POLL_INTERVAL=5000
+VITE_HERMES_POLL_INTERVAL=5000
 ```
 
-In development, the Vite dev server proxies API requests to the gateway (no CORS issues). The token is injected server-side and never exposed to the browser.
+In development, the Vite dev server proxies API requests to the local server (no CORS issues).
 
 ## How It Works
 
-1. Polls the OpenClaw Gateway via `/tools/invoke` HTTP endpoint
-2. Detects active sessions (main + sub-agents) via `sessions_list`
-3. Monitors session history for tool calls and activity
-4. Maps each session to an animated pixel character
-5. Shows tool activity as labels above characters ("Reading file.ts", "Running: npm build", etc.)
+1. Polls the Hermes API server (`/api/sessions`) to detect active sessions
+2. Monitors session message history for tool calls and activity
+3. Maps each session to an animated pixel character in the office
+4. Shows tool activity as labels above characters ("Reading file.ts", "Running: npm build", etc.)
 
 ## Usage
 
@@ -69,12 +72,30 @@ In development, the Vite dev server proxies API requests to the gateway (no CORS
 - **Undo/Redo** — 50 levels with Ctrl+Z / Ctrl+Y
 - **Export/Import** — share layouts as JSON files
 
+## Architecture
+
+```
+src/
+  api/
+    hermesClient.ts    — HTTP client for Hermes API server
+    hermesAdapter.ts  — maps Hermes sessions → pixel-agent messages
+  components/          — React UI components
+  hooks/               — React hooks for messages and state
+  office/              — Canvas rendering engine (pixel art office)
+```
+
+The adapter (`hermesAdapter.ts`) handles:
+- Session polling and lifecycle detection
+- Tool call extraction from message history
+- Sub-agent tracking and character management
+- Activity categorization (typing, reading, running, searching, spawning)
+
 ## Credits
 
 - Original [Pixel Agents](https://github.com/pablodelucca/pixel-agents) by Pablo De Lucca
 - Character sprites by [JIK-A-4, Metro City](https://jik-a-4.itch.io/metrocity-free-topdown-character-pack)
 - Crab sprite reference by [Elthen](https://elthen.itch.io/2d-pixel-art-crab-sprites)
-- Built for [OpenClaw](https://github.com/openclaw/openclaw)
+- Built for [Hermes](https://github.com/DevvGwardo/hermes-agent)
 
 ## License
 
