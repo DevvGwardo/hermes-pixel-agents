@@ -166,9 +166,7 @@ export function wallColorToHex(color: FloorColor): string {
   const ch = (1 - Math.abs(2 * lightness - 1)) * satFrac;
   const hp = h / 60;
   const x = ch * (1 - Math.abs((hp % 2) - 1));
-  let r1 = 0,
-    g1 = 0,
-    b1 = 0;
+  let r1: number, g1: number, b1: number;
 
   if (hp < 1) {
     r1 = ch;
